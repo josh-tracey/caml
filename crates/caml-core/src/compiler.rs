@@ -147,6 +147,30 @@ impl CapabilityProbe for CompositeCapabilityProbe {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceWarning {
+    HighMemoryUsage,
+}
+
+impl std::fmt::Display for ResourceWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HighMemoryUsage => write!(
+                f,
+                "Estimated total memory usage (buffers + backend) exceeds configured limit"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferPoolPlan {
+    pub pipeline_id: String,
+    pub buffer_size: usize,
+    pub buffer_count: usize,
+    pub estimated_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledGraph {
     pub system: CompiledSystem,
@@ -162,8 +186,11 @@ pub struct CompiledSystem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourcePlan {
-    pub cma_allocation_limit_bytes: u64,
-    pub estimated_cma_usage_bytes: Option<u64>,
+    pub configured_limit_bytes: u64,
+    pub estimated_pool_bytes: u64,
+    pub estimated_backend_bytes: Option<u64>,
+    pub buffer_pools: Vec<BufferPoolPlan>,
+    pub warnings: Vec<ResourceWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -227,6 +254,7 @@ pub enum RecoveryClass {
 pub struct RuntimePolicy {
     pub buffer_size: usize,
     pub watchdog_timeout: Duration,
+    pub buffer_count: usize,
 }
 
 pub struct CamlCompiler;
@@ -279,11 +307,65 @@ impl CamlCompiler {
             pipelines.push(compile_pipeline(pipeline));
         }
 
-        let cma_allocation_limit_bytes = manifest.system.cma_allocation_limit.as_bytes();
-        let estimated_cma_usage_bytes = pipelines
-            .iter()
-            .map(|pipeline| pipeline.runtime.buffer_size as u64)
-            .reduce(|acc, current| acc.saturating_add(current));
+        let cma_allocation_limit_bytes = match (
+            manifest.system.cma_allocation_limit.as_ref(),
+            manifest.system.media_memory_limit.as_ref(),
+        ) {
+            (Some(limit), _) => limit.as_bytes(),
+            (None, Some(limit)) => limit.as_bytes(),
+            (None, None) => 0,
+        };
+
+        let mut buffer_pools = Vec::new();
+        let mut estimated_pool_bytes = 0u64;
+        for pipeline in &pipelines {
+            let pool_bytes = (pipeline.runtime.buffer_size as u64)
+                .saturating_mul(pipeline.runtime.buffer_count as u64);
+            buffer_pools.push(BufferPoolPlan {
+                pipeline_id: pipeline.id.clone(),
+                buffer_size: pipeline.runtime.buffer_size,
+                buffer_count: pipeline.runtime.buffer_count,
+                estimated_bytes: pool_bytes,
+            });
+            estimated_pool_bytes = estimated_pool_bytes.saturating_add(pool_bytes);
+        }
+
+        if estimated_pool_bytes > cma_allocation_limit_bytes {
+            return Err(CompileError::ResourceLimitExceeded {
+                configured_limit_bytes: cma_allocation_limit_bytes,
+                estimated_usage_bytes: estimated_pool_bytes,
+            });
+        }
+
+        let mut estimated_backend_bytes = 0u64;
+        for pipeline in &pipelines {
+            let backend_est = match pipeline.resolved_backend {
+                ResolvedInputBackend::FfmpegRtsp => {
+                    let count = 128u64;
+                    let size = pipeline.runtime.buffer_size as u64;
+                    count.saturating_mul(size)
+                }
+                ResolvedInputBackend::AutoDevice | ResolvedInputBackend::V4l2Device => {
+                    let input_pool = 128u64 * 1200;
+                    let frame_size = 1920 * 1080 * 3 / 2;
+                    let frame_pool = 8u64 * frame_size;
+                    let output_pool = 32u64 * 256_000;
+                    input_pool + frame_pool + output_pool
+                }
+                ResolvedInputBackend::LibcameraDevice => {
+                    let frame_size = 1920 * 1080 * 3 / 2;
+                    let frame_pool = 8u64 * frame_size;
+                    let request_pool = 8u64 * frame_size;
+                    frame_pool + request_pool
+                }
+            };
+            estimated_backend_bytes = estimated_backend_bytes.saturating_add(backend_est);
+        }
+
+        let mut warnings = Vec::new();
+        if estimated_pool_bytes.saturating_add(estimated_backend_bytes) > cma_allocation_limit_bytes {
+            warnings.push(ResourceWarning::HighMemoryUsage);
+        }
 
         Ok(CompiledGraph {
             system: CompiledSystem {
@@ -291,8 +373,11 @@ impl CamlCompiler {
                 cma_allocation_limit_bytes,
             },
             resource_plan: ResourcePlan {
-                cma_allocation_limit_bytes,
-                estimated_cma_usage_bytes,
+                configured_limit_bytes: cma_allocation_limit_bytes,
+                estimated_pool_bytes,
+                estimated_backend_bytes: Some(estimated_backend_bytes),
+                buffer_pools,
+                warnings,
             },
             pipelines,
         })
@@ -406,6 +491,11 @@ fn validate_pipeline(
 fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
     let network = pipeline.network.as_ref().map(compile_network_profile);
     let processing = pipeline.processing.as_ref().map(compile_processing_profile);
+    let buffer_count = match pipeline.strategy {
+        StreamStrategy::Passthrough => 100,
+        StreamStrategy::Transcode => 64,
+        StreamStrategy::HardwareDecode => 32,
+    };
     let runtime = RuntimePolicy {
         buffer_size: network
             .as_ref()
@@ -415,6 +505,7 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
             .as_ref()
             .map(|profile| profile.stall_timeout)
             .unwrap_or(Duration::from_secs(DEFAULT_STALL_TIMEOUT_SECS)),
+        buffer_count,
     };
 
     CompiledPipeline {

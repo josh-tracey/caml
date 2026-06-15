@@ -41,7 +41,7 @@ fn parses_valid_manifest_into_typed_values() {
         manifest.system.hardware_target,
         HardwareTarget::RaspberryPi5
     );
-    assert_eq!(manifest.system.cma_allocation_limit.as_bytes(), 512_000_000);
+    assert_eq!(manifest.system.cma_allocation_limit.unwrap().as_bytes(), 512_000_000);
     assert_eq!(manifest.pipelines[0].input_type, InputType::Rtsp);
     assert_eq!(manifest.pipelines[0].strategy, StreamStrategy::Passthrough);
     assert_eq!(

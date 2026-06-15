@@ -49,7 +49,7 @@ An `implemented` claim must name at least one automated or host-gated test.
 
 ## Zero-Copy Media Path
 
-**Status:** implemented
+**Status:** partial
 
 **Evidence:**
 - `MediaStorage` enum in [`crates/caml-core/src/runtime.rs`](../crates/caml-core/src/runtime.rs) distinguishes between `Pooled` and `Borrowed` buffers to pass data slices down the processing pipeline without cloning/allocation.

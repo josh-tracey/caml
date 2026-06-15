@@ -32,6 +32,7 @@ pub struct RuntimeBuilder {
     webrtc_tracks: std::collections::HashMap<String, Arc<caml_webrtc::TrackLocalStaticRTP>>,
     #[cfg(feature = "pi")]
     libcamera_provider_factory: Option<Arc<dyn caml_linux_media::LibcameraProviderFactory>>,
+    metrics: Option<Arc<dyn caml_core::metrics::MetricsExporter>>,
 }
 
 impl RuntimeBuilder {
@@ -147,6 +148,11 @@ impl RuntimeBuilder {
         self
     }
 
+    pub fn with_metrics_exporter(mut self, metrics: Arc<dyn caml_core::metrics::MetricsExporter>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
     pub fn compile(mut self) -> Result<Self, RuntimeBuilderError> {
         if self.compiled.is_none() {
             let manifest = self
@@ -184,6 +190,227 @@ impl RuntimeBuilder {
             .runtime_factory
             .ok_or(RuntimeBuilderError::MissingRuntimeFactory)?;
 
-        Ok(RuntimeEngine::start(compiled, runtime_factory, None).await?)
+        Ok(RuntimeEngine::start(compiled, runtime_factory, self.metrics).await?)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CamlError {
+    #[error(transparent)]
+    Manifest(#[from] caml_core::error::ManifestError),
+    #[error(transparent)]
+    Compile(#[from] caml_core::error::CompileError),
+    #[error(transparent)]
+    Runtime(#[from] caml_core::error::RuntimeError),
+    #[error(transparent)]
+    Builder(#[from] RuntimeBuilderError),
+    #[error("missing capability probe for hardware target {hardware_target:?}")]
+    MissingCapabilityProbe { hardware_target: caml_core::frontend::HardwareTarget },
+    #[error("missing WebRTC track for pipeline {pipeline_id}")]
+    MissingWebRtcTrack { pipeline_id: String },
+    #[error("missing libcamera provider factory for pipeline {pipeline_id}")]
+    MissingLibcameraProvider { pipeline_id: String },
+    #[error("missing adapter for pipeline {pipeline_id}, backend {backend}")]
+    MissingAdapter { pipeline_id: String, backend: String },
+    #[error("unsupported output for pipeline {pipeline_id}: {output}")]
+    UnsupportedOutput { pipeline_id: String, output: String },
+}
+
+pub struct CamlPipeline;
+
+impl CamlPipeline {
+    pub fn from_manifest_file(path: impl AsRef<Path>) -> Result<CamlPipelineBuilder, CamlError> {
+        let file = File::open(path).map_err(caml_core::error::ManifestError::Io)?;
+        let manifest = CamlManifest::from_reader(file)?;
+        Ok(CamlPipelineBuilder::new(manifest))
+    }
+
+    pub fn from_manifest_str(input: &str) -> Result<CamlPipelineBuilder, CamlError> {
+        let manifest = CamlManifest::from_yaml_str(input)?;
+        Ok(CamlPipelineBuilder::new(manifest))
+    }
+}
+
+pub struct CamlPipelineBuilder {
+    manifest: CamlManifest,
+    capability_probe: Option<Arc<dyn CapabilityProbe>>,
+    #[cfg(feature = "webrtc")]
+    webrtc_tracks: std::collections::HashMap<String, Arc<caml_webrtc::TrackLocalStaticRTP>>,
+    #[cfg(feature = "pi")]
+    libcamera_provider_factory: Option<Arc<dyn caml_linux_media::LibcameraProviderFactory>>,
+    use_native_adapters: bool,
+    metrics: Option<Arc<dyn caml_core::metrics::MetricsExporter>>,
+}
+
+impl CamlPipelineBuilder {
+    pub fn new(manifest: CamlManifest) -> Self {
+        Self {
+            manifest,
+            capability_probe: None,
+            #[cfg(feature = "webrtc")]
+            webrtc_tracks: std::collections::HashMap::new(),
+            #[cfg(feature = "pi")]
+            libcamera_provider_factory: None,
+            use_native_adapters: false,
+            metrics: None,
+        }
+    }
+
+    pub fn with_capability_probe(mut self, capability_probe: Arc<dyn CapabilityProbe>) -> Self {
+        self.capability_probe = Some(capability_probe);
+        self
+    }
+
+    pub fn with_feature_capability_probe(mut self) -> Self {
+        #[allow(unused_mut)]
+        let mut probe = caml_core::compiler::CompositeCapabilityProbe::new();
+
+        #[cfg(feature = "ffmpeg")]
+        probe.push(Arc::new(caml_ffmpeg::ffmpeg_capabilities()));
+
+        #[cfg(feature = "webrtc")]
+        probe.push(Arc::new(caml_webrtc::webrtc_capabilities()));
+
+        #[cfg(feature = "pi")]
+        probe.push(Arc::new(caml_linux_media::linux_capability_probe()));
+
+        self.capability_probe = Some(Arc::new(probe));
+        self
+    }
+
+    #[cfg(feature = "webrtc")]
+    pub fn with_webrtc_track(
+        mut self,
+        pipeline_id: impl Into<String>,
+        track: Arc<caml_webrtc::TrackLocalStaticRTP>,
+    ) -> Self {
+        self.webrtc_tracks.insert(pipeline_id.into(), track);
+        self
+    }
+
+    #[cfg(feature = "pi")]
+    pub fn with_libcamera_provider_factory(
+        mut self,
+        provider_factory: Arc<dyn caml_linux_media::LibcameraProviderFactory>,
+    ) -> Self {
+        self.libcamera_provider_factory = Some(provider_factory);
+        self
+    }
+
+    pub fn with_native_adapters(mut self) -> Self {
+        self.use_native_adapters = true;
+        self
+    }
+
+    pub fn with_metrics_exporter(mut self, metrics: Arc<dyn caml_core::metrics::MetricsExporter>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    pub async fn start(self) -> Result<CamlRuntime, CamlError> {
+        let compiled = if let Some(ref probe) = self.capability_probe {
+            CamlCompiler::compile_with_probe(&self.manifest, probe.as_ref())?
+        } else {
+            if self.manifest.system.hardware_target != caml_core::frontend::HardwareTarget::GenericLinux {
+                return Err(CamlError::MissingCapabilityProbe {
+                    hardware_target: self.manifest.system.hardware_target,
+                });
+            }
+            CamlCompiler::compile(&self.manifest)?
+        };
+
+        for pipeline in &compiled.pipelines {
+            let has_webrtc_output = pipeline.outputs.iter().any(|o| matches!(o, caml_core::frontend::OutputProfile::WebrtcRtp { .. }));
+            if has_webrtc_output {
+                #[cfg(feature = "webrtc")]
+                {
+                    if !self.webrtc_tracks.contains_key(&pipeline.id) {
+                        return Err(CamlError::MissingWebRtcTrack {
+                            pipeline_id: pipeline.id.clone(),
+                        });
+                    }
+                }
+                #[cfg(not(feature = "webrtc"))]
+                {
+                    return Err(CamlError::UnsupportedOutput {
+                        pipeline_id: pipeline.id.clone(),
+                        output: "webrtc_rtp".to_string(),
+                    });
+                }
+            }
+
+            if pipeline.resolved_backend == caml_core::ResolvedInputBackend::LibcameraDevice {
+                #[cfg(feature = "pi")]
+                {
+                    if self.libcamera_provider_factory.is_none() {
+                        return Err(CamlError::MissingLibcameraProvider {
+                            pipeline_id: pipeline.id.clone(),
+                        });
+                    }
+                }
+                #[cfg(not(feature = "pi"))]
+                {
+                    return Err(CamlError::MissingAdapter {
+                        pipeline_id: pipeline.id.clone(),
+                        backend: "libcamera".to_string(),
+                    });
+                }
+            }
+        }
+
+        #[allow(unused_mut)]
+        let mut builder = RuntimeBuilder::new().with_compiled_graph(compiled);
+
+        if let Some(ref metrics) = self.metrics {
+            builder = builder.with_metrics_exporter(metrics.clone());
+        }
+
+        if self.use_native_adapters {
+            #[cfg(feature = "webrtc")]
+            {
+                for (pipeline_id, track) in &self.webrtc_tracks {
+                    builder = builder.with_webrtc_track(pipeline_id.clone(), track.clone());
+                }
+            }
+
+            #[cfg(feature = "pi")]
+            {
+                if let Some(ref factory) = self.libcamera_provider_factory {
+                    builder = builder.with_libcamera_provider_factory(factory.clone());
+                }
+            }
+
+            #[cfg(any(feature = "ffmpeg", feature = "pi", feature = "webrtc"))]
+            {
+                builder = builder.with_feature_media_adapters();
+            }
+        }
+
+        let handle = builder.start().await?;
+        Ok(CamlRuntime { handle })
+    }
+}
+
+pub struct CamlRuntime {
+    handle: RuntimeHandle,
+}
+
+impl std::fmt::Debug for CamlRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CamlRuntime").finish()
+    }
+}
+
+impl CamlRuntime {
+    pub async fn shutdown(&self) -> Result<(), CamlError> {
+        self.handle.shutdown().await.map_err(CamlError::from)
+    }
+
+    pub async fn status(&self) -> caml_core::runtime::RuntimeStatus {
+        self.handle.status().await
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<caml_core::runtime::RuntimeEvent> {
+        self.handle.subscribe()
     }
 }

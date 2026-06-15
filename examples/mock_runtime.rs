@@ -1,4 +1,4 @@
-//! Example: Run a mock pipeline through the RuntimeEngine.
+//! Example: Run a mock pipeline through the RuntimeBuilder.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use caml::runtime::mock::{
     MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
 };
-use caml::{CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeEngine};
+use caml::{CamlManifest, RuntimeAdapters, RuntimeBuilder};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         r#"
 system:
   hardware_target: "GENERIC_LINUX"
-  cma_allocation_limit: "128MB"
+  media_memory_limit: "128MB"
 pipelines:
   - id: "test_pipeline"
     input: "rtsp://127.0.0.1:8554/live"
@@ -27,16 +27,16 @@ pipelines:
 "#,
     )?;
 
-    let compiled = CamlCompiler::compile(&manifest)?;
-
+    let source_plan = MockSourcePlan::new(vec![
+        MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x67]),
+        MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x68]),
+        MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x65]),
+        MockSourceAction::EndOfStream,
+    ]);
+    
     let source_factory = Arc::new(MockSourceFactory::new(HashMap::from([(
         "test_pipeline".to_string(),
-        MockSourcePlan::new(vec![
-            MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x67]),
-            MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x68]),
-            MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x65]),
-            MockSourceAction::EndOfStream,
-        ]),
+        source_plan,
     )])));
 
     let recorder = MockSinkRecorder::default();
@@ -46,7 +46,12 @@ pipelines:
     )])));
 
     let adapters = RuntimeAdapters::new(source_factory, sink_factory);
-    let handle = RuntimeEngine::start(compiled, adapters, None).await?;
+    
+    // Start the runtime using the builder pattern
+    let handle = RuntimeBuilder::from_manifest(manifest)
+        .with_runtime_factory(adapters)
+        .start()
+        .await?;
 
     // Wait for the pipeline to finish processing
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

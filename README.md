@@ -101,9 +101,9 @@ As part of our commitment to hardware honesty, this checklist maps `caml`'s bold
 - [x] [No Subprocess Orchestration](docs/claims.md#no-subprocess-orchestration): Enforced architecture. Backends exclusively use native bindings.
 - [x] [Buffer Reuse](docs/claims.md#buffer-reuse): Pooled buffers are preallocated and reused in the hot loop.
 - [x] [Bounded Hot-Path Allocation](docs/claims.md#bounded-hot-path-allocation): Verified via custom counting allocator test.
-- [x] [Zero-Copy Media Path](docs/claims.md#zero-copy-media-path): Pipeline uses pooled or borrowed storage slices to bypass cloning.
+- [ ] [Zero-Copy Media Path](docs/claims.md#zero-copy-media-path) (Partial): Pipeline uses pooled or borrowed storage slices to bypass cloning, but WebRTC packetizer has slice copy constraints.
 - [x] [RTSP to WebRTC RTP](docs/claims.md#rtsp-to-webrtc-rtp): Dynamic configuration is fully propagated to WebRTC output RTP packets.
-- [x] [Native Libcamera Provider](docs/claims.md#native-libcamera-provider): Native FFI session via safe background worker thread and channels.
+- [ ] [Native Libcamera Provider](docs/claims.md#native-libcamera-provider) (Experimental): Native FFI session via safe background worker thread and channels.
 - [x] [Pi Hardware Guardrails](docs/claims.md#pi-hardware-guardrails): Probe-backed compile-time checks validate target and capabilities.
 - [x] [Pi 4 Hardware Encode Execution](docs/claims.md#pi-4-hardware-encode-execution): Verified execution with target-gated tests.
 - [x] [Pi 5 Stateless Decode Execution](docs/claims.md#pi-5-stateless-decode-execution): Verified execution with target-gated tests.

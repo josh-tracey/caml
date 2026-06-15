@@ -41,7 +41,7 @@ async fn test_pi4_hardware_encode_flow() {
         r#"
 system:
   hardware_target: "RASPBERRY_PI_4"
-  cma_allocation_limit: "512MB"
+  media_memory_limit: "512MB"
 pipelines:
   - id: "pi4_encode_flow"
     input: "/dev/video0"
@@ -55,38 +55,47 @@ pipelines:
       tune: "zerolatency"
       frame_rate: 30
       bitrate: "512k"
+    outputs:
+      - type: "recording"
 "#
     )
     .expect("manifest should parse");
 
-    // Build the runtime
-    let mut builder = RuntimeBuilder::new()
-        .with_manifest(manifest)
-        .with_capability_probe(Arc::new(probe));
+    let recording_packets = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let mut adapters = caml::adapters::BuiltinAdapters::default();
+    adapters.recording_packets = Some(recording_packets.clone());
 
-    // We configure native media adapters (under pi feature, this includes libcamera if we pass provider factory,
-    // and FFmpeg under ffmpeg feature).
-    // Let's wire them up.
+    #[cfg(feature = "ffmpeg")]
+    {
+        adapters.ffmpeg_source = Some(Arc::new(caml_ffmpeg::FfmpegSourceFactory::new()));
+    }
     #[cfg(all(feature = "pi", target_os = "linux"))]
     {
-        builder = builder.with_libcamera_provider_factory(Arc::new(caml_linux_media::camera::NativeLibcameraFactory));
+        adapters.libcamera_source = Some(Arc::new(
+            caml_linux_media::LibcameraSourceFactory::new(Arc::new(caml_linux_media::camera::NativeLibcameraFactory)),
+        ));
     }
-    builder = builder.with_feature_media_adapters();
 
+    let builder = RuntimeBuilder::new()
+        .with_manifest(manifest)
+        .with_capability_probe(Arc::new(probe))
+        .with_runtime_factory(adapters);
 
     let runtime = builder.start().await.expect("failed to start Pi 4 encode runtime");
 
     let start_time = Instant::now();
-
-    // Run for a bit or until we receive enough packets
-    // In our case, we can't easily record packets directly unless we subscribe or print them,
-    // or register a recorder/sink. Let's run for 2 seconds and observe no errors.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Verify status
     let status = runtime.status().await;
     let pipeline_status = status.pipeline("pi4_encode_flow");
     println!("Pipeline status after 2 seconds: {:?}", pipeline_status);
+    
+    // Ensure pipeline did not fail
+    assert_ne!(pipeline_status, Some(caml::runtime::TaskStatus::Failed));
+
+    let packets = recording_packets.lock().await.clone();
+    println!("Recorded {} packets.", packets.len());
 
     runtime.shutdown().await.expect("shutdown failed");
     println!("Pi 4 hardware encode flow completed. Packets run in: {:?}", start_time.elapsed());

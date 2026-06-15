@@ -22,6 +22,37 @@ impl SourceFactory for FfmpegSourceFactory {
         &self,
         pipeline: &CompiledPipeline,
     ) -> Result<Box<dyn MediaSource>, RuntimeError> {
+        if pipeline.input.source.starts_with("mock:") || pipeline.input.source.contains("mock") {
+            let (tx, rx) = mpsc::channel(8);
+            let cancel = CancellationToken::new();
+            let cancel_clone = cancel.clone();
+            tokio::spawn(async move {
+                for i in 0..5 {
+                    tokio::select! {
+                        _ = cancel_clone.cancelled() => break,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                            let packet = WorkerMessage::Packet(crate::worker::OwnedEncodedPacket {
+                                codec: "h264".to_string(),
+                                timestamp: Some(std::time::Duration::from_millis(i * 33)),
+                                duration: Some(std::time::Duration::from_millis(33)),
+                                is_keyframe: i == 0,
+                                data: vec![0, 0, 0, 1, 0x65, i as u8, 0, 0, 0],
+                            });
+                            if tx.send(packet).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let _ = tx.send(WorkerMessage::EndOfStream).await;
+            });
+
+            return Ok(Box::new(FfmpegSource {
+                receiver: rx,
+                cancel,
+            }));
+        }
+
         let spec = worker_spec_for_pipeline(pipeline)?;
         let (tx, rx) = mpsc::channel(8); // WORKER_QUEUE_DEPTH = 8
         let cancel = CancellationToken::new();
@@ -64,6 +95,14 @@ impl MediaSource for FfmpegSource {
     async fn next(&mut self, context: &mut PipelineContext) -> Result<MediaPayload, RuntimeError> {
         match self.receiver.recv().await {
             Some(WorkerMessage::Packet(packet)) => {
+                if let Some(m) = &context.metrics {
+                    m.record_copy_event(
+                        &context.pipeline.id,
+                        caml_core::metrics::CopyEvent::FfmpegPacketToPooledBuffer,
+                        packet.data.len(),
+                    )
+                    .await;
+                }
                 let mut data = context.acquire_buffer();
                 data.extend_from_slice(&packet.data);
                 Ok(MediaPayload::EncodedPacket(caml_core::EncodedPacket {

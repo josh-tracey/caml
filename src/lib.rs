@@ -1,7 +1,9 @@
 pub mod adapters;
 mod builder;
 
-pub use builder::{RuntimeBuilder, RuntimeBuilderError};
+pub use builder::{
+    CamlError, CamlPipeline, CamlPipelineBuilder, CamlRuntime, RuntimeBuilder, RuntimeBuilderError,
+};
 pub use caml_core::*;
 
 pub mod compiler {

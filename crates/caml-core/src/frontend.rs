@@ -68,6 +68,7 @@ pub enum OutputProfile {
         ssrc: Option<String>,
         clock_rate: Option<u32>,
     },
+    Recording,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -111,7 +112,8 @@ pub struct PipelineNode {
 #[serde(deny_unknown_fields)]
 pub struct SystemConfig {
     pub hardware_target: HardwareTarget,
-    pub cma_allocation_limit: ByteSize,
+    pub cma_allocation_limit: Option<ByteSize>,
+    pub media_memory_limit: Option<ByteSize>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -136,7 +138,14 @@ impl CamlManifest {
     }
 
     pub fn validate(&self) -> Result<(), ManifestError> {
+        if self.system.cma_allocation_limit.is_none() && self.system.media_memory_limit.is_none() {
+            return Err(ManifestError::Validation(
+                "Either cma_allocation_limit or media_memory_limit must be specified".to_string(),
+            ));
+        }
+
         if self.pipelines.is_empty() {
+
             return Err(ManifestError::Validation(
                 "manifest must define at least one pipeline".to_string(),
             ));

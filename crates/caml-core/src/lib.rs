@@ -10,6 +10,7 @@ pub use compiler::{
     CompiledNetworkProfile, CompiledPipeline, CompiledProcessingProfile, CompiledSystem,
     CompositeCapabilityProbe, ExecutionMode, HostCapabilities, PiModel, RecoveryClass,
     RecoveryPolicy, ResolvedInputBackend, ResourcePlan, RuntimePolicy, StaticCapabilityProbe,
+    BufferPoolPlan, ResourceWarning,
 };
 pub use error::{CompileError, ManifestError, RuntimeError};
 pub use frontend::{
@@ -20,6 +21,7 @@ pub use runtime::{
     EncodedPacket, MediaBuffer, MediaPayload, MediaSink, MediaSource, MediaStorage, MediaTransform,
     NoopTransformFactory, PipelineContext, PipelineFactory, PipelineStages, PoolStats, RuntimeAdapters,
     RuntimeEngine, RuntimeEvent, RuntimeFactory, RuntimeHandle, RuntimeStatus, SinkFactory,
-    SourceFactory, TaskStatus, TransformFactory,
+    SourceFactory, TaskStatus, TransformFactory, RecordingSink, RecordedPacket, BorrowedMediaSlice,
+    MappedFrameHandle, FfmpegPacketHandle,
 };
 pub use units::{Bitrate, ByteSize};

@@ -7,7 +7,7 @@ use caml_core::{
         mock::{
             MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
         },
-        RuntimeAdapters, RuntimeEngine, TaskStatus,
+        RuntimeAdapters, RuntimeEngine, TaskStatus, RuntimeEvent,
     },
 };
 
@@ -74,10 +74,12 @@ pipelines:
     let mut recoveries = 0;
 
     while let Ok(event) = events.recv().await {
-        if event.status == TaskStatus::Recovering {
-            recoveries += 1;
-        } else if event.status == TaskStatus::Stopped || event.status == TaskStatus::Failed {
-            break;
+        if let RuntimeEvent::StatusChanged { status, .. } = event {
+            if status == TaskStatus::Recovering {
+                recoveries += 1;
+            } else if status == TaskStatus::Stopped || status == TaskStatus::Failed {
+                break;
+            }
         }
     }
 

@@ -91,7 +91,7 @@ impl SinkFactory for WebRtcSinkFactory {
                 ssrc.clone(),
                 *clock_rate,
             ),
-            None => (None, None, None, None, None),
+            _ => (None, None, None, None, None),
         };
 
         let codec = codec_opt.unwrap_or_else(|| "h264".to_string());
@@ -282,10 +282,18 @@ impl MediaSink for WebRtcSink {
     async fn consume(
         &mut self,
         payload: MediaPayload,
-        _context: &mut PipelineContext,
+        context: &mut PipelineContext,
     ) -> Result<(), RuntimeError> {
         match payload {
             MediaPayload::EncodedPacket(packet) => {
+                if let Some(m) = &context.metrics {
+                    m.record_copy_event(
+                        &self.pipeline_id,
+                        caml_core::metrics::CopyEvent::WebRtcPacketizerCopy,
+                        packet.data.len(),
+                    )
+                    .await;
+                }
                 self.write_encoded_packet(&packet.codec, packet.data.as_slice(), packet.duration)
                     .await
             }
@@ -419,6 +427,7 @@ mod tests {
             runtime: RuntimePolicy {
                 buffer_size: 1024,
                 watchdog_timeout: Duration::from_secs(5),
+                buffer_count: 100,
             },
             resolved_backend: ResolvedInputBackend::FfmpegRtsp,
             execution_mode: ExecutionMode::EncodedPackets,
@@ -449,6 +458,7 @@ mod tests {
         let mut context = caml_core::PipelineContext {
             pipeline: pipeline.clone(),
             buffer_pool: caml_core::runtime::BufferPool::new(1024),
+            metrics: None,
         };
 
         let mut data = context.acquire_buffer();

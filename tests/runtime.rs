@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use caml::runtime::{EncodedPacket, MediaPayload, MediaSource, PipelineContext, SourceFactory};
+use caml::runtime::{EncodedPacket, MediaPayload, MediaSource, PipelineContext, SourceFactory, RuntimeEvent};
 use caml::{
     runtime::mock::{
         MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
@@ -109,8 +109,10 @@ async fn runtime_watchdog_recovers_after_a_transient_stall() {
                 .recv()
                 .await
                 .expect("runtime event should be available");
-            if event.pipeline_id == "camera_a" && event.status == TaskStatus::Recovering {
-                break true;
+            if let RuntimeEvent::StatusChanged { ref pipeline_id, status, .. } = event {
+                if pipeline_id == "camera_a" && status == TaskStatus::Recovering {
+                    break true;
+                }
             }
         }
     })
@@ -305,8 +307,10 @@ async fn runtime_recovers_after_a_transient_source_error() {
                 .recv()
                 .await
                 .expect("runtime event should be available");
-            if event.pipeline_id == "camera_a" && event.status == TaskStatus::Recovering {
-                break true;
+            if let RuntimeEvent::StatusChanged { ref pipeline_id, status, .. } = event {
+                if pipeline_id == "camera_a" && status == TaskStatus::Recovering {
+                    break true;
+                }
             }
         }
     })

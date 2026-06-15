@@ -33,6 +33,9 @@ async-trait = "0.1"
 [dev-dependencies]
 async-trait = "0.1"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+webrtc = "0.17"
+rtp = "0.17"
+tempfile = "3"
 
 [[bench]]
 name = "buffer_pool"

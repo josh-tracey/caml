@@ -16,6 +16,7 @@ pub struct BuiltinAdapters {
     pub libcamera_source: Option<Arc<caml_linux_media::LibcameraSourceFactory>>,
     #[cfg(feature = "webrtc")]
     pub webrtc_sinks: HashMap<String, Arc<caml_webrtc::WebRtcSinkFactory>>,
+    pub recording_packets: Option<Arc<tokio::sync::Mutex<Vec<caml_core::runtime::RecordedPacket>>>>,
 }
 
 #[async_trait]
@@ -68,7 +69,17 @@ impl PipelineFactory for BuiltinAdapters {
             .iter()
             .any(|o| matches!(o, caml_core::OutputProfile::WebrtcRtp { .. }));
 
-        let sink_res: Result<Box<dyn MediaSink>, RuntimeError> = if has_webrtc_output {
+        let has_recording_output = pipeline
+            .outputs
+            .iter()
+            .any(|o| matches!(o, caml_core::OutputProfile::Recording));
+
+        let sink_res: Result<Box<dyn MediaSink>, RuntimeError> = if has_recording_output {
+            let packets = self.recording_packets.clone().unwrap_or_else(|| {
+                Arc::new(tokio::sync::Mutex::new(Vec::new()))
+            });
+            Ok(Box::new(caml_core::runtime::RecordingSink { packets }))
+        } else if has_webrtc_output {
             #[cfg(feature = "webrtc")]
             {
                 if let Some(factory) = self.webrtc_sinks.get(&pipeline.id) {
@@ -94,6 +105,12 @@ impl PipelineFactory for BuiltinAdapters {
             transforms: Vec::new(),
             sink,
         })
+    }
+}
+
+impl From<BuiltinAdapters> for caml_core::RuntimeFactory {
+    fn from(adapters: BuiltinAdapters) -> Self {
+        caml_core::RuntimeFactory::new(Arc::new(adapters))
     }
 }
 

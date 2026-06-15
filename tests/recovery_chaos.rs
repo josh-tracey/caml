@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use caml::{
-    CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeEngine, TaskStatus,
+    runtime::RuntimeEvent, CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeEngine, TaskStatus,
 };
 use caml::runtime::mock::{
     MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
@@ -100,16 +100,18 @@ pipelines:
     let mut finished = 0;
 
     while let Ok(event) = events.recv().await {
-        if event.status == TaskStatus::Recovering {
-            if event.pipeline_id == "net_chaos" {
-                net_recoveries += 1;
-            } else if event.pipeline_id == "dev_chaos" {
-                dev_recoveries += 1;
-            }
-        } else if event.status == TaskStatus::Stopped || event.status == TaskStatus::Failed {
-            finished += 1;
-            if finished >= 2 {
-                break;
+        if let RuntimeEvent::StatusChanged { pipeline_id, status, .. } = event {
+            if status == TaskStatus::Recovering {
+                if pipeline_id == "net_chaos" {
+                    net_recoveries += 1;
+                } else if pipeline_id == "dev_chaos" {
+                    dev_recoveries += 1;
+                }
+            } else if status == TaskStatus::Stopped || status == TaskStatus::Failed {
+                finished += 1;
+                if finished >= 2 {
+                    break;
+                }
             }
         }
     }

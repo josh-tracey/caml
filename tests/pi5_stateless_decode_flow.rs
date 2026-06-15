@@ -36,12 +36,16 @@ async fn test_pi5_stateless_decode_flow() {
         r#"
 system:
   hardware_target: "RASPBERRY_PI_5"
-  cma_allocation_limit: "512MB"
+  media_memory_limit: "512MB"
 pipelines:
   - id: "pi5_decode_flow"
     input: "rtsp://127.0.0.1:8554/live"
     type: "rtsp"
     strategy: "hardware_decode"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
     processing:
       codec: "h264"
       encoder: "software"
@@ -49,16 +53,31 @@ pipelines:
       tune: "zerolatency"
       frame_rate: 30
       bitrate: "512k"
+    outputs:
+      - type: "recording"
 "#
     )
     .expect("manifest should parse");
 
-    // Build the runtime
-    let mut builder = RuntimeBuilder::new()
-        .with_manifest(manifest)
-        .with_capability_probe(Arc::new(probe));
+    let recording_packets = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let mut adapters = caml::adapters::BuiltinAdapters::default();
+    adapters.recording_packets = Some(recording_packets.clone());
 
-    builder = builder.with_feature_media_adapters();
+    #[cfg(feature = "ffmpeg")]
+    {
+        adapters.ffmpeg_source = Some(Arc::new(caml_ffmpeg::FfmpegSourceFactory::new()));
+    }
+    #[cfg(all(feature = "pi", target_os = "linux"))]
+    {
+        adapters.libcamera_source = Some(Arc::new(
+            caml_linux_media::LibcameraSourceFactory::new(Arc::new(caml_linux_media::camera::NativeLibcameraFactory)),
+        ));
+    }
+
+    let builder = RuntimeBuilder::new()
+        .with_manifest(manifest)
+        .with_capability_probe(Arc::new(probe))
+        .with_runtime_factory(adapters);
 
     let runtime = builder.start().await.expect("failed to start Pi 5 decode runtime");
 
@@ -69,6 +88,12 @@ pipelines:
     let status = runtime.status().await;
     let pipeline_status = status.pipeline("pi5_decode_flow");
     println!("Pipeline status after 2 seconds: {:?}", pipeline_status);
+
+    // Ensure pipeline did not fail
+    assert_ne!(pipeline_status, Some(caml::runtime::TaskStatus::Failed));
+
+    let packets = recording_packets.lock().await.clone();
+    println!("Recorded {} packets.", packets.len());
 
     runtime.shutdown().await.expect("shutdown failed");
 }

@@ -19,7 +19,7 @@ use caml_core::{
 
 use crate::{camera::error::CameraError, LibcameraFrameProvider, LibcameraProviderFactory};
 
-use super::config::{apply_capture_profile, resolve_camera_index};
+use super::config::{apply_capture_profile, CameraSelector};
 
 #[derive(Clone, Default)]
 pub struct NativeLibcameraFactory;
@@ -111,10 +111,24 @@ fn run_camera_worker(
         return Err(CameraError::NoCameras);
     }
 
-    let index = resolve_camera_index(input_path);
-    let cam = cameras
-        .get(index)
-        .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?;
+    let selector = CameraSelector::parse(input_path);
+    let cam = match selector {
+        CameraSelector::Index(idx) => {
+            cameras.get(idx).ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
+        }
+        CameraSelector::Id(ref id) => {
+            cameras
+                .iter()
+                .find(|c| c.id() == id)
+                .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
+        }
+        CameraSelector::Model(ref model) => {
+            cameras
+                .iter()
+                .find(|c| c.id().contains(model))
+                .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
+        }
+    };
 
     let mut cam = cam
         .acquire()
@@ -242,13 +256,22 @@ impl Drop for NativeLibcameraProvider {
 impl LibcameraFrameProvider for NativeLibcameraProvider {
     async fn next_payload(
         &mut self,
-        _context: &mut PipelineContext,
+        context: &mut PipelineContext,
     ) -> Result<MediaPayload, RuntimeError> {
         let msg = self
             .frame_rx
             .recv()
             .await
             .ok_or_else(|| RuntimeError::adapter("camera worker thread terminated"))?;
+
+        if let Some(m) = &context.metrics {
+            m.record_copy_event(
+                &context.pipeline.id,
+                caml_core::metrics::CopyEvent::LibcameraFrameToPooledBuffer,
+                msg.data.len(),
+            )
+            .await;
+        }
 
         Ok(MediaPayload::DecodedFrame(DecodedFrame {
             pixel_format: self.pixel_format.clone(),

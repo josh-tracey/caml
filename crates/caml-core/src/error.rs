@@ -24,6 +24,11 @@ pub enum CompileError {
     UnsupportedCapability(String),
     #[error("capability probe failed: {0}")]
     ProbeFailure(String),
+    #[error("resource limit exceeded: configured limit is {configured_limit_bytes} bytes, but estimated usage is {estimated_usage_bytes} bytes")]
+    ResourceLimitExceeded {
+        configured_limit_bytes: u64,
+        estimated_usage_bytes: u64,
+    },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

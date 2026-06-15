@@ -366,6 +366,7 @@ pipelines:
         let mut context = caml_core::PipelineContext {
             pipeline: pipeline.clone(),
             buffer_pool: caml_core::runtime::BufferPool::new(pipeline.runtime.buffer_size),
+            metrics: None,
         };
 
         let payload = source
@@ -413,6 +414,14 @@ pipelines:
             let Some(bytes) = self.frames.pop_front() else {
                 return Ok(MediaPayload::EndOfStream);
             };
+            if let Some(m) = &context.metrics {
+                m.record_copy_event(
+                    &context.pipeline.id,
+                    caml_core::metrics::CopyEvent::LibcameraFrameToPooledBuffer,
+                    bytes.len(),
+                )
+                .await;
+            }
             let mut data = context.acquire_buffer();
             data.extend_from_slice(&bytes);
             Ok(MediaPayload::EncodedPacket(caml_core::EncodedPacket {

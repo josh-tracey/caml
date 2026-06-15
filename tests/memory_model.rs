@@ -65,9 +65,9 @@ fn test_media_storage_variants() {
     assert_eq!(storage_pooled.len(), 3);
     assert!(!storage_pooled.is_empty());
 
-    let storage_borrowed = MediaStorage::Borrowed(vec![4, 5, 6]);
-    assert_eq!(storage_borrowed.as_slice(), &[4, 5, 6]);
-    assert_eq!(storage_borrowed.len(), 3);
+    let storage_owned = MediaStorage::Owned(vec![4, 5, 6]);
+    assert_eq!(storage_owned.as_slice(), &[4, 5, 6]);
+    assert_eq!(storage_owned.len(), 3);
 }
 
 #[test]

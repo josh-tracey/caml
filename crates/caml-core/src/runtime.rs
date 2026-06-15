@@ -29,10 +29,17 @@ pub enum TaskStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeEvent {
-    pub pipeline_id: String,
-    pub status: TaskStatus,
-    pub message: Option<String>,
+pub enum RuntimeEvent {
+    StatusChanged {
+        pipeline_id: String,
+        status: TaskStatus,
+        message: Option<String>,
+    },
+    BackendStarted {
+        pipeline_id: String,
+        codec_path: String,
+        backend_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -96,6 +103,10 @@ impl BufferPool {
         }
     }
 
+    pub fn high_watermark_bytes(&self) -> usize {
+        self.stats().high_watermark * self.buffer_size
+    }
+
     pub fn acquire(&self) -> MediaBuffer {
         let mut guard = self.inner.lock().expect("buffer pool lock poisoned");
         let mut bytes = if let Some(buf) = guard.buffers.pop() {
@@ -151,24 +162,81 @@ impl Drop for MediaBuffer {
     }
 }
 
+use std::any::Any;
+
+#[derive(Clone)]
+pub struct BorrowedMediaSlice {
+    ptr: *const u8,
+    len: usize,
+    #[allow(dead_code)]
+    owner: Arc<dyn Any + Send + Sync>,
+}
+
+unsafe impl Send for BorrowedMediaSlice {}
+unsafe impl Sync for BorrowedMediaSlice {}
+
+impl BorrowedMediaSlice {
+    pub fn new<T>(data: &[u8], owner: Arc<T>) -> Self
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        Self {
+            ptr: data.as_ptr(),
+            len: data.len(),
+            owner,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl std::fmt::Debug for BorrowedMediaSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BorrowedMediaSlice")
+            .field("len", &self.len)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MappedFrameHandle {
+    pub slice: BorrowedMediaSlice,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfmpegPacketHandle {
+    pub slice: BorrowedMediaSlice,
+}
+
 #[derive(Debug)]
 pub enum MediaStorage {
     Pooled(MediaBuffer),
-    Borrowed(Vec<u8>),
+    Owned(Vec<u8>),
+    BorrowedSlice(BorrowedMediaSlice),
+    MappedFrame(MappedFrameHandle),
+    FfmpegPacket(FfmpegPacketHandle),
 }
 
 impl MediaStorage {
     pub fn as_slice(&self) -> &[u8] {
         match self {
             Self::Pooled(buf) => buf.as_slice(),
-            Self::Borrowed(vec) => vec.as_slice(),
+            Self::Owned(vec) => vec.as_slice(),
+            Self::BorrowedSlice(s) => s.as_slice(),
+            Self::MappedFrame(h) => h.slice.as_slice(),
+            Self::FfmpegPacket(h) => h.slice.as_slice(),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             Self::Pooled(buf) => buf.len(),
-            Self::Borrowed(vec) => vec.len(),
+            Self::Owned(vec) => vec.len(),
+            Self::BorrowedSlice(s) => s.len,
+            Self::MappedFrame(h) => h.slice.len,
+            Self::FfmpegPacket(h) => h.slice.len,
         }
     }
 
@@ -220,6 +288,7 @@ impl MediaPayload {
 pub struct PipelineContext {
     pub pipeline: CompiledPipeline,
     pub buffer_pool: BufferPool,
+    pub metrics: Option<Arc<dyn crate::metrics::MetricsExporter>>,
 }
 
 impl PipelineContext {
@@ -249,6 +318,38 @@ pub trait MediaSink: Send {
         payload: MediaPayload,
         context: &mut PipelineContext,
     ) -> Result<(), RuntimeError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordedPacket {
+    pub codec: String,
+    pub bytes: usize,
+    pub is_keyframe: bool,
+    pub timestamp: Option<Duration>,
+}
+
+pub struct RecordingSink {
+    pub packets: Arc<tokio::sync::Mutex<Vec<RecordedPacket>>>,
+}
+
+#[async_trait]
+impl MediaSink for RecordingSink {
+    async fn consume(
+        &mut self,
+        payload: MediaPayload,
+        _context: &mut PipelineContext,
+    ) -> Result<(), RuntimeError> {
+        if let MediaPayload::EncodedPacket(packet) = payload {
+            let mut guard = self.packets.lock().await;
+            guard.push(RecordedPacket {
+                codec: packet.codec,
+                bytes: packet.data.len(),
+                is_keyframe: packet.is_keyframe,
+                timestamp: packet.timestamp,
+            });
+        }
+        Ok(())
+    }
 }
 
 pub struct PipelineStages {
@@ -506,6 +607,11 @@ async fn supervise_pipeline_task(
         };
 
         publish_status(&inner, &pipeline.id, TaskStatus::Running, None).await;
+        let _ = inner.events_tx.send(RuntimeEvent::BackendStarted {
+            pipeline_id: pipeline.id.clone(),
+            codec_path: format!("{:?}", pipeline.codec_path),
+            backend_name: format!("{:?}", pipeline.resolved_backend),
+        });
         last_success_start = Some(tokio::time::Instant::now());
 
         match run_pipeline_once(
@@ -583,36 +689,55 @@ async fn run_pipeline_once(
     mut stages: PipelineStages,
     metrics: Option<Arc<dyn crate::metrics::MetricsExporter>>,
 ) -> PipelineLoopExit {
+    let buffer_pool = BufferPool::new(pipeline.runtime.buffer_size);
+    buffer_pool.preallocate(pipeline.runtime.buffer_count);
+
     let mut context = PipelineContext {
         pipeline: pipeline.clone(),
-        buffer_pool: BufferPool::new(pipeline.runtime.buffer_size),
+        buffer_pool: buffer_pool.clone(),
+        metrics: metrics.clone(),
     };
 
+    let result = run_pipeline_loop(cancellation, &mut context, &mut stages, &metrics).await;
+
+    if let Some(m) = &metrics {
+        m.record_memory_watermark(&pipeline.id, buffer_pool.high_watermark_bytes()).await;
+    }
+
+    result
+}
+
+async fn run_pipeline_loop(
+    cancellation: CancellationToken,
+    context: &mut PipelineContext,
+    stages: &mut PipelineStages,
+    metrics: &Option<Arc<dyn crate::metrics::MetricsExporter>>,
+) -> PipelineLoopExit {
     loop {
         let mut payload = tokio::select! {
             _ = cancellation.cancelled() => return PipelineLoopExit::Cancelled,
-            result = timeout(pipeline.runtime.watchdog_timeout, stages.source.next(&mut context)) => {
+            result = timeout(context.pipeline.runtime.watchdog_timeout, stages.source.next(context)) => {
                 match result {
                     Ok(Ok(payload)) => payload,
                     Ok(Err(error)) => {
-                        if let Some(m) = &metrics {
-                            m.record_stream_error(&pipeline.id, &error.to_string()).await;
+                        if let Some(m) = metrics {
+                            m.record_stream_error(&context.pipeline.id, &error.to_string()).await;
                         }
                         return pipeline_exit_from_error(error);
                     }
                     Err(_) => {
                         return PipelineLoopExit::Recoverable(format!(
                             "no media received within {:?}",
-                            pipeline.runtime.watchdog_timeout,
+                            context.pipeline.runtime.watchdog_timeout,
                         ));
                     }
                 }
             }
         };
 
-        if let Some(metrics) = &metrics {
+        if let Some(m) = metrics {
             if let Some(data) = payload.data() {
-                metrics.record_throughput(&pipeline.id, data.len()).await;
+                m.record_throughput(&context.pipeline.id, data.len()).await;
             }
         }
 
@@ -621,11 +746,11 @@ async fn run_pipeline_once(
         }
 
         for transform in &mut stages.transforms {
-            match transform.transform(payload, &mut context).await {
+            match transform.transform(payload, context).await {
                 Ok(transformed) => payload = transformed,
                 Err(error) => {
-                    if let Some(m) = &metrics {
-                        m.record_stream_error(&pipeline.id, &error.to_string())
+                    if let Some(m) = metrics {
+                        m.record_stream_error(&context.pipeline.id, &error.to_string())
                             .await;
                     }
                     return pipeline_exit_from_error(error);
@@ -633,9 +758,9 @@ async fn run_pipeline_once(
             }
         }
 
-        if let Err(error) = stages.sink.consume(payload, &mut context).await {
-            if let Some(m) = &metrics {
-                m.record_stream_error(&pipeline.id, &error.to_string())
+        if let Err(error) = stages.sink.consume(payload, context).await {
+            if let Some(m) = metrics {
+                m.record_stream_error(&context.pipeline.id, &error.to_string())
                     .await;
             }
             return pipeline_exit_from_error(error);
@@ -663,7 +788,7 @@ async fn publish_status(
         .write()
         .await
         .insert(pipeline_id.to_string(), status);
-    let _ = inner.events_tx.send(RuntimeEvent {
+    let _ = inner.events_tx.send(RuntimeEvent::StatusChanged {
         pipeline_id: pipeline_id.to_string(),
         status,
         message,
