@@ -51,7 +51,7 @@ pub enum CapabilityRequirement {
     Pi5StatelessDecoder,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HostCapabilities {
     pub ffmpeg_available: bool,
     pub v4l2_available: bool,
@@ -62,19 +62,7 @@ pub struct HostCapabilities {
     pub has_pi5_stateless_decoder: bool,
 }
 
-impl Default for HostCapabilities {
-    fn default() -> Self {
-        Self {
-            ffmpeg_available: false,
-            v4l2_available: false,
-            libcamera_available: false,
-            rtp_packetization_available: false,
-            pi_model: None,
-            has_pi4_h264_encoder: false,
-            has_pi5_stateless_decoder: false,
-        }
-    }
-}
+
 
 impl HostCapabilities {
     pub fn merge(&self, other: &Self) -> Result<Self, CompileError> {

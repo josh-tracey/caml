@@ -1,4 +1,6 @@
+#[allow(unused_imports)]
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,66 +24,65 @@ impl PipelineFactory for BuiltinAdapters {
         &self,
         pipeline: &CompiledPipeline,
     ) -> Result<PipelineStages, RuntimeError> {
-        let source: Box<dyn MediaSource> = match pipeline.resolved_backend {
+        let source_res: Result<Box<dyn MediaSource>, RuntimeError> = match pipeline.resolved_backend {
             caml_core::ResolvedInputBackend::FfmpegRtsp
             | caml_core::ResolvedInputBackend::AutoDevice
             | caml_core::ResolvedInputBackend::V4l2Device => {
                 #[cfg(feature = "ffmpeg")]
                 {
                     if let Some(factory) = &self.ffmpeg_source {
-                        caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await?
+                        caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await
                     } else {
-                        return Err(RuntimeError::adapter(
-                            "ffmpeg source factory not configured",
-                        ));
+                        Err(RuntimeError::adapter("ffmpeg source factory not configured"))
                     }
                 }
                 #[cfg(not(feature = "ffmpeg"))]
                 {
-                    return Err(RuntimeError::adapter("ffmpeg feature is disabled"));
+                    Err(RuntimeError::adapter("ffmpeg feature is disabled"))
                 }
             }
             caml_core::ResolvedInputBackend::LibcameraDevice => {
                 #[cfg(feature = "pi")]
                 {
                     if let Some(factory) = &self.libcamera_source {
-                        caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await?
+                        caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await
                     } else {
-                        return Err(RuntimeError::adapter(
-                            "libcamera provider factory not configured",
-                        ));
+                        Err(RuntimeError::adapter("libcamera provider factory not configured"))
                     }
                 }
                 #[cfg(not(feature = "pi"))]
                 {
-                    return Err(RuntimeError::adapter("pi feature is disabled"));
+                    Err(RuntimeError::adapter("pi feature is disabled"))
                 }
             }
         };
+        let source = source_res?;
 
         let has_webrtc_output = pipeline
             .outputs
             .iter()
             .any(|o| matches!(o, caml_core::OutputProfile::WebrtcRtp { .. }));
 
-        let sink: Box<dyn MediaSink> = if has_webrtc_output {
+        let sink_res: Result<Box<dyn MediaSink>, RuntimeError> = if has_webrtc_output {
             #[cfg(feature = "webrtc")]
             {
-                let factory = self.webrtc_sinks.get(&pipeline.id).ok_or_else(|| {
-                    RuntimeError::adapter(format!(
-                        "missing webrtc track for pipeline '{}'",
+                if let Some(factory) = self.webrtc_sinks.get(&pipeline.id) {
+                    caml_core::SinkFactory::build_sink(factory.as_ref(), pipeline).await
+                } else {
+                    Err(RuntimeError::adapter(format!(
+                        "no webrtc sink configured for pipeline {}",
                         pipeline.id
-                    ))
-                })?;
-                caml_core::SinkFactory::build_sink(factory.as_ref(), pipeline).await?
+                    )))
+                }
             }
             #[cfg(not(feature = "webrtc"))]
             {
-                return Err(RuntimeError::adapter("webrtc feature is disabled"));
+                Err(RuntimeError::adapter("webrtc feature is disabled"))
             }
         } else {
-            Box::new(NullSink)
+            Ok(Box::new(NullSink))
         };
+        let sink = sink_res?;
 
         Ok(PipelineStages {
             source,

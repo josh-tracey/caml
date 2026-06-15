@@ -12,7 +12,7 @@ fn check_dir(dir: &Path) {
 
         if path.is_dir() {
             check_dir(&path);
-        } else if path.extension().map_or(false, |ext| ext == "rs") {
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
             let content = fs::read_to_string(&path).unwrap_or_default();
 
             for (line_num, line) in content.lines().enumerate() {
