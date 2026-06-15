@@ -236,3 +236,61 @@ pipelines:
         caml::CodecPath::HardwareDecode
     );
 }
+
+#[test]
+fn assigns_adapter_specific_recovery_classes() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "RASPBERRY_PI_5"
+  cma_allocation_limit: "512MB"
+pipelines:
+  - id: "rtsp_primary"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "passthrough"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
+  - id: "libcamera_capture"
+    input: "/base/soc/i2c0mux/i2c@1/imx219@10"
+    type: "device"
+    backend: "libcamera"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+  - id: "pi5_decode"
+    input: "rtsp://127.0.0.1:8554/h265"
+    type: "rtsp"
+    strategy: "hardware_decode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let compiled = CamlCompiler::compile(&manifest).expect("compiler should succeed");
+    assert_eq!(
+        compiled.pipelines[0].recovery.class,
+        caml::RecoveryClass::Network
+    );
+    assert_eq!(
+        compiled.pipelines[1].recovery.class,
+        caml::RecoveryClass::Device
+    );
+    assert_eq!(
+        compiled.pipelines[2].recovery.class,
+        caml::RecoveryClass::Hardware
+    );
+}
