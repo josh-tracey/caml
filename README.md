@@ -8,11 +8,11 @@ What is implemented today:
 
 - Strict YAML manifest parsing with typed enums, unit parsing, and structural validation
 - Graph compilation into a runtime-ready topology with backend resolution, execution mode selection, recovery policy, and capability requirements
-- A staged async runtime that supports `source -> transform(s) -> sink`, preallocated buffer pooling, observable task status, and supervised stall recovery
+- A staged async runtime that supports `source -> transform(s) -> sink`, bounded reusable buffer pooling, observable task status, and supervised stall recovery
 - A public `RuntimeBuilder` facade in the top-level `caml` crate
 - Feature-gated backend crates for FFmpeg, WebRTC, and Linux/Pi capability probing
 - Concrete FFmpeg media paths: RTSP H.264 passthrough, RTSP/V4L2 software H.264 transcode, and Pi-aware codec selection for Pi 4 hardware encode plus Pi 5 stateless hardware decode
-- Linux/Pi capability probing that detects Pi model, V4L2/libcamera availability, Pi 4 encode nodes, and Pi 5 stateless decode topology for compile-time guardrails
+- Linux/Pi capability probing that detects Pi model, V4L2/libcamera availability, Pi 4 encode nodes, and Pi 5 stateless decode topology for probe-backed compile-time guardrails
 - A libcamera source-factory foundation in `caml-linux-media` that accepts native frame providers for `backend: "libcamera"` pipelines without shelling out to libcamera command-line tools
 - Adapter-oriented recovery classification (`network`, `device`, `hardware`) on compiled pipelines, ready for backend-specific telemetry and tuning
 
@@ -61,7 +61,7 @@ Today, these crates can cover concrete Linux media slices:
 - Pi 4 hardware-backed H.264 encode selection through FFmpeg's `h264_v4l2m2m` path
 - Pi 5 stateless hardware decode selection through FFmpeg's `*_v4l2request` decoders, paired with software H.264 encode
 
-They also provide Linux/Pi host capability probing that can be merged with FFmpeg/WebRTC probes through `RuntimeBuilder::with_feature_capability_probe()`.
+They also provide Linux/Pi host capability probing that can be merged with FFmpeg/WebRTC probes through `RuntimeBuilder::with_feature_capability_probe()`. Host capability guardrails are enforced only when compiling with an explicit probe path, such as `CamlCompiler::compile_with_probe()` or a `RuntimeBuilder` configured with a capability probe; plain `CamlCompiler::compile()` performs schema and hardware-target validation without inspecting the host.
 
 Production libcamera FFI capture, broader adapter recovery tuning, and host-backed Pi media-flow validation are still follow-up work. See `docs/roadmap.md` and `docs/pi-testing.md` for acceptance criteria and host test prerequisites.
 
@@ -182,7 +182,7 @@ The current tests cover:
 
 - valid and invalid manifest parsing
 - graph compilation guardrails
-- capability probe merging and Pi host/target mismatch rejection
+- capability probe merging, RTP packetization requirements, and Pi host/target mismatch rejection
 - buffer reuse in the hot path
 - transient stall detection and supervised recovery
 - transient recoverable source errors that rebuild and restart a pipeline
@@ -193,6 +193,6 @@ The next implementation milestone is:
 
 1. Build the production libcamera FFI provider behind the new provider-backed `LibcameraSourceFactory` foundation
 2. Expand adapter-specific recovery tuning beyond the compiled `network`/`device`/`hardware` recovery classes
-3. Extend the host-gated Pi tests from compile-time guardrails into full media-flow execution coverage for Pi 4 hardware encode and Pi 5 hardware decode
+3. Extend the host-gated Pi tests from probe-backed compile-time guardrails into full media-flow execution coverage for Pi 4 hardware encode and Pi 5 hardware decode
 
 That path now has a concrete workspace structure and runtime contract to land into, instead of another round of aspirational prose.

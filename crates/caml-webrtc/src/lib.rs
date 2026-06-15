@@ -21,7 +21,7 @@ const DEFAULT_FRAME_DURATION: Duration = Duration::from_millis(33);
 
 pub fn webrtc_capabilities() -> StaticCapabilityProbe {
     StaticCapabilityProbe::new(HostCapabilities {
-        webrtc_packetization_available: true,
+        rtp_packetization_available: true,
         ..HostCapabilities::default()
     })
 }

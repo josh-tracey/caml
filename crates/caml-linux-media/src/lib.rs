@@ -42,7 +42,7 @@ impl CapabilityProbe for LinuxCapabilityProbe {
             ffmpeg_available: false,
             v4l2_available: inspector.has_v4l2(),
             libcamera_available: inspector.has_libcamera(),
-            webrtc_packetization_available: false,
+            rtp_packetization_available: false,
             pi_model: model,
             has_pi4_h264_encoder: detect_pi4_h264_encoder(model, &v4l2_names, &media_names),
             has_pi5_stateless_decoder: detect_pi5_stateless_decoder(

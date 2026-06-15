@@ -137,6 +137,38 @@ pipelines:
 }
 
 #[test]
+fn passthrough_requires_rtp_packetization_capability() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "rtsp_passthrough"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "passthrough"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
+"#,
+    )
+    .expect("manifest should parse");
+
+    let probe = StaticCapabilityProbe::new(HostCapabilities {
+        ffmpeg_available: true,
+        rtp_packetization_available: false,
+        ..HostCapabilities::default()
+    });
+
+    let error = CamlCompiler::compile_with_probe(&manifest, &probe)
+        .expect_err("passthrough should require RTP packetization capability");
+    assert!(matches!(error, CompileError::UnsupportedCapability(_)));
+    assert!(error.to_string().contains("RTP packetization"));
+}
+
+#[test]
 fn merges_capabilities_from_multiple_probes() {
     let manifest = CamlManifest::from_yaml_str(
         r#"
@@ -162,7 +194,7 @@ pipelines:
         ..HostCapabilities::default()
     })));
     probe.push(Arc::new(StaticCapabilityProbe::new(HostCapabilities {
-        webrtc_packetization_available: true,
+        rtp_packetization_available: true,
         ..HostCapabilities::default()
     })));
 

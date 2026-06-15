@@ -46,7 +46,7 @@ pub enum CapabilityRequirement {
     Ffmpeg,
     V4l2,
     Libcamera,
-    WebRtcPacketization,
+    RtpPacketization,
     Pi4HardwareEncoder,
     Pi5StatelessDecoder,
 }
@@ -56,7 +56,7 @@ pub struct HostCapabilities {
     pub ffmpeg_available: bool,
     pub v4l2_available: bool,
     pub libcamera_available: bool,
-    pub webrtc_packetization_available: bool,
+    pub rtp_packetization_available: bool,
     pub pi_model: Option<PiModel>,
     pub has_pi4_h264_encoder: bool,
     pub has_pi5_stateless_decoder: bool,
@@ -68,7 +68,7 @@ impl Default for HostCapabilities {
             ffmpeg_available: false,
             v4l2_available: false,
             libcamera_available: false,
-            webrtc_packetization_available: false,
+            rtp_packetization_available: false,
             pi_model: None,
             has_pi4_h264_encoder: false,
             has_pi5_stateless_decoder: false,
@@ -93,8 +93,8 @@ impl HostCapabilities {
             ffmpeg_available: self.ffmpeg_available || other.ffmpeg_available,
             v4l2_available: self.v4l2_available || other.v4l2_available,
             libcamera_available: self.libcamera_available || other.libcamera_available,
-            webrtc_packetization_available: self.webrtc_packetization_available
-                || other.webrtc_packetization_available,
+            rtp_packetization_available: self.rtp_packetization_available
+                || other.rtp_packetization_available,
             pi_model,
             has_pi4_h264_encoder: self.has_pi4_h264_encoder || other.has_pi4_h264_encoder,
             has_pi5_stateless_decoder: self.has_pi5_stateless_decoder
@@ -533,7 +533,7 @@ fn capability_requirements_for(pipeline: &PipelineNode) -> Vec<CapabilityRequire
     }
 
     if matches!(pipeline.strategy, StreamStrategy::Passthrough) {
-        requirements.push(CapabilityRequirement::WebRtcPacketization);
+        requirements.push(CapabilityRequirement::RtpPacketization);
     }
 
     if matches!(resolve_codec_path(pipeline), CodecPath::HardwareTranscode) {
@@ -572,11 +572,11 @@ impl CapabilityRequirement {
                     pipeline_id
                 )),
             ),
-            CapabilityRequirement::WebRtcPacketization
-                if !capabilities.webrtc_packetization_available =>
+            CapabilityRequirement::RtpPacketization
+                if !capabilities.rtp_packetization_available =>
             {
                 Err(CompileError::UnsupportedCapability(format!(
-                    "pipeline '{}' requires WebRTC packetization support but none was detected",
+                    "pipeline '{}' requires RTP packetization support but none was detected",
                     pipeline_id
                 )))
             }

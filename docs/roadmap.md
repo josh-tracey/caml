@@ -18,7 +18,7 @@ Target area: `crates/caml-linux-media` for Linux/Pi capture glue, with runtime i
 Acceptance criteria:
 
 - `backend: "libcamera"` remains a typed manifest/backend selection.
-- Capability validation rejects libcamera pipelines when the Linux probe cannot detect libcamera support.
+- Probe-backed capability validation rejects libcamera pipelines when the Linux probe cannot detect libcamera support.
 - A libcamera source factory can build a `MediaSource` for `ResolvedInputBackend::LibcameraDevice` without using `std::process::Command` or shelling out to libcamera command-line tools.
 - Provider implementations hand encoded packets or native frame buffers into `MediaPayload` without introducing avoidable frame-loop allocation or copies.
 - Tests cover provider-backed source construction and end-of-stream behavior with a fake provider.
@@ -44,4 +44,4 @@ Acceptance criteria:
 - Pi 4 hardware encode execution tests are available but skipped unless the host is a real Pi 4 with the expected V4L2 encoder topology.
 - Pi 5 stateless hardware decode execution tests are available but skipped unless the host is a real Pi 5 with media topology exposing the stateless decoder.
 - Skip messages explain the missing host prerequisite instead of failing generic CI.
-- Tests validate compile-time capability guardrails first, then can be extended to run real media once dedicated hardware runners exist.
+- Tests validate probe-backed compile-time capability guardrails first, then can be extended to run real media once dedicated hardware runners exist.

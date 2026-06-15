@@ -16,7 +16,7 @@ const H264_START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
 pub fn ffmpeg_capabilities() -> StaticCapabilityProbe {
     StaticCapabilityProbe::new(HostCapabilities {
         ffmpeg_available: init_ffmpeg(),
-        webrtc_packetization_available: true,
+        rtp_packetization_available: false,
         ..HostCapabilities::default()
     })
 }
