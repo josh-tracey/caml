@@ -7,8 +7,8 @@ pub mod units;
 pub use compiler::{
     CamlCompiler, CapabilityProbe, CapabilityRequirement, CodecPath, CompiledGraph, CompiledInput,
     CompiledNetworkProfile, CompiledPipeline, CompiledProcessingProfile, CompiledSystem,
-    CompositeCapabilityProbe, ExecutionMode, HostCapabilities, PiModel, RecoveryPolicy,
-    ResolvedInputBackend, ResourcePlan, RuntimePolicy, StaticCapabilityProbe,
+    CompositeCapabilityProbe, ExecutionMode, HostCapabilities, PiModel, RecoveryClass,
+    RecoveryPolicy, ResolvedInputBackend, ResourcePlan, RuntimePolicy, StaticCapabilityProbe,
 };
 pub use error::{CompileError, ManifestError, RuntimeError};
 pub use frontend::{

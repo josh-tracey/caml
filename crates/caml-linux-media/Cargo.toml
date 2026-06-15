@@ -4,4 +4,8 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
+async-trait = "0.1"
 caml-core = { path = "../caml-core", version = "1.0.0" }
+
+[dev-dependencies]
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }

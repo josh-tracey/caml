@@ -191,17 +191,86 @@ fn any_name_matches(names: &[String], tokens: &[&str]) -> bool {
     })
 }
 
+#[async_trait::async_trait]
+pub trait LibcameraFrameProvider: Send + Sync {
+    async fn next_payload(
+        &mut self,
+        context: &mut caml_core::PipelineContext,
+    ) -> Result<caml_core::MediaPayload, caml_core::RuntimeError>;
+}
+
+#[async_trait::async_trait]
+pub trait LibcameraProviderFactory: Send + Sync {
+    async fn open(
+        &self,
+        pipeline: &caml_core::CompiledPipeline,
+    ) -> Result<Box<dyn LibcameraFrameProvider>, caml_core::RuntimeError>;
+}
+
+#[derive(Clone)]
+pub struct LibcameraSourceFactory {
+    provider_factory: std::sync::Arc<dyn LibcameraProviderFactory>,
+}
+
+impl LibcameraSourceFactory {
+    pub fn new(provider_factory: std::sync::Arc<dyn LibcameraProviderFactory>) -> Self {
+        Self { provider_factory }
+    }
+}
+
+#[async_trait::async_trait]
+impl caml_core::SourceFactory for LibcameraSourceFactory {
+    async fn build_source(
+        &self,
+        pipeline: &caml_core::CompiledPipeline,
+    ) -> Result<Box<dyn caml_core::MediaSource>, caml_core::RuntimeError> {
+        if pipeline.input.kind != caml_core::InputType::Device
+            || pipeline.resolved_backend != caml_core::ResolvedInputBackend::LibcameraDevice
+        {
+            return Err(caml_core::RuntimeError::adapter(format!(
+                "pipeline '{}' is not a libcamera device pipeline",
+                pipeline.id
+            )));
+        }
+
+        let provider = self.provider_factory.open(pipeline).await?;
+        Ok(Box::new(LibcameraSource { provider }))
+    }
+}
+
+struct LibcameraSource {
+    provider: Box<dyn LibcameraFrameProvider>,
+}
+
+#[async_trait::async_trait]
+impl caml_core::MediaSource for LibcameraSource {
+    async fn next(
+        &mut self,
+        context: &mut caml_core::PipelineContext,
+    ) -> Result<caml_core::MediaPayload, caml_core::RuntimeError> {
+        self.provider.next_payload(context).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         fs,
-        path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use caml_core::{CapabilityProbe, HardwareTarget, PiModel};
+    use caml_core::{
+        CamlCompiler, CapabilityProbe, HardwareTarget, MediaPayload, PiModel, RuntimeError,
+        SourceFactory,
+    };
 
-    use super::{linux_capability_probe, LinuxCapabilityProbe};
+    use super::{
+        linux_capability_probe, LibcameraFrameProvider, LibcameraProviderFactory,
+        LibcameraSourceFactory, LinuxCapabilityProbe,
+    };
 
     #[test]
     fn detects_pi4_hardware_encoder_from_sysfs_names() {
@@ -261,6 +330,98 @@ mod tests {
         let _probe = linux_capability_probe();
     }
 
+    #[tokio::test]
+    async fn libcamera_source_factory_streams_provider_frames() {
+        let manifest = caml_core::CamlManifest::from_yaml_str(
+            r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "libcam0"
+    input: "/base/soc/i2c0mux/i2c@1/imx219@10"
+    type: "device"
+    backend: "libcamera"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: 512k
+"#,
+        )
+        .expect("manifest should parse");
+        let graph = CamlCompiler::compile(&manifest).expect("manifest should compile");
+        let pipeline = graph.pipelines.first().expect("pipeline should exist");
+        let factory = LibcameraSourceFactory::new(Arc::new(FakeLibcameraFactory));
+        let mut source = factory
+            .build_source(pipeline)
+            .await
+            .expect("source should build");
+        let mut context = caml_core::PipelineContext {
+            pipeline: pipeline.clone(),
+            buffer_pool: caml_core::runtime::BufferPool::new(pipeline.runtime.buffer_size),
+        };
+
+        let payload = source
+            .next(&mut context)
+            .await
+            .expect("frame should stream");
+        match payload {
+            MediaPayload::EncodedPacket(packet) => {
+                assert_eq!(packet.codec, "h264");
+                assert_eq!(packet.data.as_slice(), &[1, 2, 3, 4]);
+            }
+            other => panic!("expected encoded packet, got {other:?}"),
+        }
+
+        assert!(matches!(
+            source.next(&mut context).await.expect("eos should stream"),
+            MediaPayload::EndOfStream
+        ));
+    }
+
+    struct FakeLibcameraFactory;
+
+    #[async_trait::async_trait]
+    impl LibcameraProviderFactory for FakeLibcameraFactory {
+        async fn open(
+            &self,
+            _pipeline: &caml_core::CompiledPipeline,
+        ) -> Result<Box<dyn LibcameraFrameProvider>, RuntimeError> {
+            Ok(Box::new(FakeLibcameraProvider {
+                frames: VecDeque::from([vec![1, 2, 3, 4]]),
+            }))
+        }
+    }
+
+    struct FakeLibcameraProvider {
+        frames: VecDeque<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LibcameraFrameProvider for FakeLibcameraProvider {
+        async fn next_payload(
+            &mut self,
+            context: &mut caml_core::PipelineContext,
+        ) -> Result<MediaPayload, RuntimeError> {
+            let Some(bytes) = self.frames.pop_front() else {
+                return Ok(MediaPayload::EndOfStream);
+            };
+            let mut data = context.acquire_buffer();
+            data.extend_from_slice(&bytes);
+            Ok(MediaPayload::EncodedPacket(caml_core::EncodedPacket {
+                codec: "h264".to_string(),
+                timestamp: Some(Duration::from_millis(1)),
+                duration: Some(Duration::from_millis(33)),
+                is_keyframe: true,
+                data,
+            }))
+        }
+    }
+
     fn temp_root(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -282,6 +443,4 @@ mod tests {
     fn cleanup(root: &Path) {
         let _ = fs::remove_dir_all(root);
     }
-
-    use std::path::Path;
 }

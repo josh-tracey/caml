@@ -225,6 +225,14 @@ pub struct CompiledProcessingProfile {
 pub struct RecoveryPolicy {
     pub max_restarts: u32,
     pub restart_backoff: Duration,
+    pub class: RecoveryClass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryClass {
+    Network,
+    Device,
+    Hardware,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,11 +431,33 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         resolved_backend: resolve_backend(pipeline),
         execution_mode: resolve_execution_mode(pipeline.strategy),
         codec_path: resolve_codec_path(pipeline),
-        recovery: RecoveryPolicy {
-            max_restarts: DEFAULT_MAX_RECOVERIES,
-            restart_backoff: Duration::from_millis(DEFAULT_RECOVERY_BACKOFF_MS),
-        },
+        recovery: recovery_policy_for(pipeline),
         capability_requirements: capability_requirements_for(pipeline),
+    }
+}
+
+fn recovery_policy_for(pipeline: &PipelineNode) -> RecoveryPolicy {
+    let class = match (
+        pipeline.input_type,
+        pipeline.strategy,
+        pipeline.backend.unwrap_or(InputBackend::Auto),
+    ) {
+        (_, StreamStrategy::HardwareDecode, _) => RecoveryClass::Hardware,
+        (InputType::Rtsp, _, _) => RecoveryClass::Network,
+        (
+            InputType::Device,
+            _,
+            InputBackend::V4l2
+            | InputBackend::Libcamera
+            | InputBackend::Auto
+            | InputBackend::Ffmpeg,
+        ) => RecoveryClass::Device,
+    };
+
+    RecoveryPolicy {
+        max_restarts: DEFAULT_MAX_RECOVERIES,
+        restart_backoff: Duration::from_millis(DEFAULT_RECOVERY_BACKOFF_MS),
+        class,
     }
 }
 
