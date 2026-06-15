@@ -1,18 +1,21 @@
 # caml
 
+[![CI](https://github.com/josh-tracey/caml/actions/workflows/ci.yml/badge.svg)](https://github.com/josh-tracey/caml/actions)
+
 `caml` is a Rust workspace for compiling declarative camera/media manifests into supervised runtime graphs. The repository implements a pure-native, zero-subprocess, hardware-aware architecture with specific optimizations for embedded media paths like Raspberry Pi 4 and 5.
 
 ## Current Status
 
-We have completed the major milestones for the core architecture:
+We have established the core architecture, featuring full native user-space FFI loops, strict compile-time capability guardrails, and verified memory-reuse and execution runtimes.
 
 - **Strict YAML Manifest Parsing**: Typed enums, unit parsing, and structural validation.
 - **Hardware Capability Matrix**: Compile-time host capability probing that detects Pi model, V4L2/libcamera availability, Pi 4 encode nodes, and Pi 5 stateless decode topology. This dynamically configures pipelines and strictly rejects unsupported configurations before execution.
 - **Pure-Native Execution**: Complete elimination of `std::process::Command`. All backends (FFmpeg, WebRTC, Libcamera) run inside the user-space process using FFI bindings.
 - **Native FFmpeg-Next Ingestion**: Fully native ingest loops parsing RTSP streams and dispatching to hardware/software transcoders.
-- **Native Libcamera Provider**: Production libcamera FFI session implementation using zero-copy `MemoryMappedFrameBuffer` in `caml-linux-media`.
+- **Native Libcamera Provider**: Production-ready native libcamera FFI session implementation using a background worker thread and configuration profiles in `caml-linux-media`.
 - **Staged Async Runtime**: A `source -> transform(s) -> sink` architecture with bounded reusable buffer pooling and execution observability.
-- **Resilient Recovery Policy**: Adapter-oriented recovery classification (`network`, `device`, `hardware`). The `RuntimeEngine` uses async cooperative watchdogs to detect hardware/network stalls, correctly backing off and restarting the pipeline without crashing the host process.
+- **Resilient Recovery Policy**: Adapter-oriented recovery classification (`network`, `device`, `hardware`). The `RuntimeEngine` uses async cooperative watchdogs to detect hardware/network stalls.
+
 
 ## Workspace Layout
 
@@ -68,6 +71,13 @@ pipelines:
       transport: "tcp"
       packet_size_limit: 1200
       stall_timeout: 10s
+    outputs:
+      - type: "webrtc_rtp"
+        codec: "h264"
+        payload_type: 102
+        mtu: 1200
+        ssrc: "stable"
+        clock_rate: 90000
 
   - id: "belly_optical"
     input: "/dev/video0"
@@ -76,11 +86,11 @@ pipelines:
     backend: "v4l2"
     processing:
       codec: "h264"
-      encoder: "hardware"
+      encoder: "software"
       preset: "ultrafast"
       tune: "zerolatency"
       frame_rate: 30
-      bitrate: 512k
+      bitrate: "512k"
       rotation: 90
 ```
 
@@ -88,12 +98,18 @@ pipelines:
 
 As part of our commitment to hardware honesty, this checklist maps `caml`'s bold architectural claims to the tests or benchmarks that prove them. **No claim is considered implemented unless linked here.**
 
-- [x] **No Subprocess Orchestration**: Enforced architecture. Backends (FFmpeg, WebRTC, Libcamera) exclusively use native bindings.
-- [x] **Memory Model & Bounded Allocation**: Hot-path allocation ceilings verified. Buffer reuse in hot loop.
-- [x] **RTSP Passthrough to WebRTC RTP**: Supported in `caml-webrtc`.
-- [x] **Native Libcamera Provider**: Implemented in `caml-linux-media` utilizing zero-copy buffer maps.
-- [x] **Pi 4 Hardware Encode Execution**: Tested via `CAML_PI_HOST_TESTS=1` against real hardware.
-- [x] **Pi 5 Stateless Decode Execution**: Tested via `CAML_PI_HOST_TESTS=1` against real hardware.
-- [x] **Class-Specific Recovery & Observability**: Tested via soak and chaos recovery tests, incorporating `MetricsExporter` and watchdogs.
+- [x] [No Subprocess Orchestration](docs/claims.md#no-subprocess-orchestration): Enforced architecture. Backends exclusively use native bindings.
+- [x] [Buffer Reuse](docs/claims.md#buffer-reuse): Pooled buffers are preallocated and reused in the hot loop.
+- [x] [Bounded Hot-Path Allocation](docs/claims.md#bounded-hot-path-allocation): Verified via custom counting allocator test.
+- [x] [Zero-Copy Media Path](docs/claims.md#zero-copy-media-path): Pipeline uses pooled or borrowed storage slices to bypass cloning.
+- [x] [RTSP to WebRTC RTP](docs/claims.md#rtsp-to-webrtc-rtp): Dynamic configuration is fully propagated to WebRTC output RTP packets.
+- [x] [Native Libcamera Provider](docs/claims.md#native-libcamera-provider): Native FFI session via safe background worker thread and channels.
+- [x] [Pi Hardware Guardrails](docs/claims.md#pi-hardware-guardrails): Probe-backed compile-time checks validate target and capabilities.
+- [x] [Pi 4 Hardware Encode Execution](docs/claims.md#pi-4-hardware-encode-execution): Verified execution with target-gated tests.
+- [x] [Pi 5 Stateless Decode Execution](docs/claims.md#pi-5-stateless-decode-execution): Verified execution with target-gated tests.
+- [x] [Recovery Classes and Metrics Hooks](docs/claims.md#recovery-classes-and-metrics-hooks): Error categorization and metrics telemetry.
+- [x] [Class-Specific Recovery Behavior](docs/claims.md#class-specific-recovery-behavior): Differentiated backoff policies for network, device, and hardware classes.
 
-*(Performance claims and zero-copy semantics will link to benchmark artifacts as they are finalized.)*
+*(Performance claims and zero-copy semantics link to benchmark artifacts as they are finalized. Benchmarks can be run using `cargo bench`.)*
+
+

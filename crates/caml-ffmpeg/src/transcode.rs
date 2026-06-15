@@ -1,10 +1,27 @@
-fn transcode_packets(
+use std::time::Duration;
+use tokio::sync::mpsc;
+use ffmpeg_next as ffmpeg;
+
+use caml_core::CompiledProcessingProfile;
+
+use crate::hwaccel::TranscodeBackend;
+use crate::worker::{WorkerMessage, OwnedEncodedPacket, InputSpec};
+use crate::device::{
+    open_media_input, best_video_stream, frame_duration_from_processing, duration_from_packet,
+    duration_from_time_base,
+};
+use crate::h264::{H264Config, extract_h264_config, normalize_h264_payload};
+
+use tokio_util::sync::CancellationToken;
+
+pub fn transcode_packets(
     input: &str,
     input_spec: &InputSpec,
     processing: &CompiledProcessingProfile,
     backend: TranscodeBackend,
     default_frame_duration: Duration,
     tx: &mpsc::Sender<WorkerMessage>,
+    cancel: &CancellationToken,
 ) -> Result<(), String> {
     let mut context = open_media_input(input, input_spec)?;
     let nominal_duration =
@@ -18,6 +35,10 @@ fn transcode_packets(
     };
 
     for (stream, packet) in context.packets() {
+        if cancel.is_cancelled() {
+            break;
+        }
+
         if stream.index() != stream_index {
             continue;
         }
@@ -36,7 +57,7 @@ fn transcode_packets(
     Ok(())
 }
 
-struct VideoTranscoder {
+pub struct VideoTranscoder {
     decoder: ffmpeg::decoder::Video,
     filter: ffmpeg::filter::Graph,
     encoder: ffmpeg::encoder::Video,
@@ -46,7 +67,7 @@ struct VideoTranscoder {
 }
 
 impl VideoTranscoder {
-    fn new(
+    pub fn new(
         stream: &ffmpeg::format::stream::Stream<'_>,
         processing: &CompiledProcessingProfile,
         backend: TranscodeBackend,
@@ -73,25 +94,25 @@ impl VideoTranscoder {
         })
     }
 
-    fn send_packet_to_decoder(&mut self, packet: &ffmpeg::Packet) -> Result<(), String> {
+    pub fn send_packet_to_decoder(&mut self, packet: &ffmpeg::Packet) -> Result<(), String> {
         self.decoder
             .send_packet(packet)
             .map_err(|error| format!("failed to send packet to decoder: {}", error))
     }
 
-    fn send_eof_to_decoder(&mut self) -> Result<(), String> {
+    pub fn send_eof_to_decoder(&mut self) -> Result<(), String> {
         self.decoder
             .send_eof()
             .map_err(|error| format!("failed to send decoder EOF: {}", error))
     }
 
-    fn send_eof_to_encoder(&mut self) -> Result<(), String> {
+    pub fn send_eof_to_encoder(&mut self) -> Result<(), String> {
         self.encoder
             .send_eof()
             .map_err(|error| format!("failed to send encoder EOF: {}", error))
     }
 
-    fn receive_decoded_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_decoded_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
         let mut decoded = ffmpeg::frame::Video::empty();
         while self.decoder.receive_frame(&mut decoded).is_ok() {
             let pts = decoded.timestamp().or(decoded.pts());
@@ -110,7 +131,7 @@ impl VideoTranscoder {
         Ok(())
     }
 
-    fn flush_filter(&mut self) -> Result<(), String> {
+    pub fn flush_filter(&mut self) -> Result<(), String> {
         let mut source = self
             .filter
             .get("in")
@@ -121,7 +142,7 @@ impl VideoTranscoder {
             .map_err(|error| format!("failed to flush video filter graph: {}", error))
     }
 
-    fn receive_filtered_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_filtered_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
         let mut sink = self
             .filter
             .get("out")
@@ -141,7 +162,7 @@ impl VideoTranscoder {
         Ok(())
     }
 
-    fn receive_encoded_packets(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_encoded_packets(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
         let mut encoded = ffmpeg::Packet::empty();
         while self.encoder.receive_packet(&mut encoded).is_ok() {
             let raw_data = encoded
@@ -171,7 +192,7 @@ impl VideoTranscoder {
     }
 }
 
-fn open_video_decoder(
+pub fn open_video_decoder(
     stream: &ffmpeg::format::stream::Stream<'_>,
     backend: TranscodeBackend,
 ) -> Result<ffmpeg::decoder::Video, String> {
@@ -217,7 +238,7 @@ fn open_video_decoder(
     }
 }
 
-fn build_video_filter(
+pub fn build_video_filter(
     decoder: &ffmpeg::decoder::Video,
     time_base: ffmpeg::Rational,
     rotation: Rotation,
@@ -275,7 +296,7 @@ fn build_video_filter(
     Ok(filter)
 }
 
-fn open_h264_encoder(
+pub fn open_h264_encoder(
     decoder: &ffmpeg::decoder::Video,
     processing: &CompiledProcessingProfile,
     backend: TranscodeBackend,
@@ -335,7 +356,7 @@ fn open_h264_encoder(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Rotation {
+pub enum Rotation {
     None,
     Clockwise,
     HalfTurn,
@@ -343,7 +364,7 @@ enum Rotation {
 }
 
 impl Rotation {
-    fn filter_spec(self) -> &'static str {
+    pub fn filter_spec(self) -> &'static str {
         match self {
             Self::None => "null",
             Self::Clockwise => "transpose=clock",
@@ -353,7 +374,7 @@ impl Rotation {
     }
 }
 
-fn normalize_rotation(rotation: Option<i32>) -> Result<Rotation, String> {
+pub fn normalize_rotation(rotation: Option<i32>) -> Result<Rotation, String> {
     match rotation.unwrap_or(0) {
         0 => Ok(Rotation::None),
         90 | -270 => Ok(Rotation::Clockwise),
@@ -366,31 +387,17 @@ fn normalize_rotation(rotation: Option<i32>) -> Result<Rotation, String> {
     }
 }
 
-fn rotated_dimensions(width: u32, height: u32, rotation: Rotation) -> (u32, u32) {
+pub fn rotated_dimensions(width: u32, height: u32, rotation: Rotation) -> (u32, u32) {
     match rotation {
         Rotation::Clockwise | Rotation::CounterClockwise => (height, width),
         Rotation::None | Rotation::HalfTurn => (width, height),
     }
 }
 
-fn sanitize_rational(value: ffmpeg::Rational) -> ffmpeg::Rational {
+pub fn sanitize_rational(value: ffmpeg::Rational) -> ffmpeg::Rational {
     if value.numerator() <= 0 || value.denominator() <= 0 {
         ffmpeg::Rational(1, 1)
     } else {
         value
     }
 }
-
-fn open_media_input(
-    input: &str,
-    input_spec: &InputSpec,
-) -> Result<ffmpeg::format::context::Input, String> {
-    match input_spec {
-        InputSpec::Rtsp { transport } => open_rtsp_input(input, *transport),
-        InputSpec::Device {
-            backend,
-            frame_rate,
-        } => open_device_input(input, *backend, *frame_rate),
-    }
-}
-

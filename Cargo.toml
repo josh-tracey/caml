@@ -32,3 +32,13 @@ async-trait = "0.1"
 
 [dev-dependencies]
 async-trait = "0.1"
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "buffer_pool"
+harness = false
+
+[[bench]]
+name = "mock_passthrough"
+harness = false
+

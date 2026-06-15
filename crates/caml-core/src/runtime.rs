@@ -46,25 +46,65 @@ impl RuntimeStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolStats {
+    pub available: usize,
+    pub in_use: usize,
+    pub high_watermark: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PoolInner {
+    buffers: Vec<Vec<u8>>,
+    allocated_count: usize,
+    high_watermark: usize,
+}
+
 #[derive(Clone)]
 pub struct BufferPool {
-    inner: Arc<Mutex<Vec<Vec<u8>>>>,
+    inner: Arc<std::sync::Mutex<PoolInner>>,
     buffer_size: usize,
 }
 
 impl BufferPool {
     pub fn new(buffer_size: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Vec::new())),
+            inner: Arc::new(std::sync::Mutex::new(PoolInner {
+                buffers: Vec::new(),
+                allocated_count: 0,
+                high_watermark: 0,
+            })),
             buffer_size: buffer_size.max(1),
+        }
+    }
+
+    pub fn preallocate(&self, count: usize) {
+        let mut guard = self.inner.lock().expect("buffer pool lock poisoned");
+        for _ in 0..count {
+            guard.buffers.push(Vec::with_capacity(self.buffer_size));
+        }
+        guard.allocated_count += count;
+        guard.high_watermark = guard.high_watermark.max(guard.allocated_count);
+    }
+
+    pub fn stats(&self) -> PoolStats {
+        let guard = self.inner.lock().expect("buffer pool lock poisoned");
+        PoolStats {
+            available: guard.buffers.len(),
+            in_use: guard.allocated_count.saturating_sub(guard.buffers.len()),
+            high_watermark: guard.high_watermark,
         }
     }
 
     pub fn acquire(&self) -> MediaBuffer {
         let mut guard = self.inner.lock().expect("buffer pool lock poisoned");
-        let mut bytes = guard
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(self.buffer_size));
+        let mut bytes = if let Some(buf) = guard.buffers.pop() {
+            buf
+        } else {
+            guard.allocated_count += 1;
+            guard.high_watermark = guard.high_watermark.max(guard.allocated_count);
+            Vec::with_capacity(self.buffer_size)
+        };
         bytes.clear();
 
         MediaBuffer {
@@ -77,7 +117,7 @@ impl BufferPool {
 #[derive(Debug)]
 pub struct MediaBuffer {
     bytes: Vec<u8>,
-    pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    pool: Arc<std::sync::Mutex<PoolInner>>,
 }
 
 impl MediaBuffer {
@@ -107,7 +147,33 @@ impl Drop for MediaBuffer {
         let mut bytes = std::mem::take(&mut self.bytes);
         bytes.clear();
         let mut guard = self.pool.lock().expect("buffer pool lock poisoned");
-        guard.push(bytes);
+        guard.buffers.push(bytes);
+    }
+}
+
+#[derive(Debug)]
+pub enum MediaStorage {
+    Pooled(MediaBuffer),
+    Borrowed(Vec<u8>),
+}
+
+impl MediaStorage {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Pooled(buf) => buf.as_slice(),
+            Self::Borrowed(vec) => vec.as_slice(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Pooled(buf) => buf.len(),
+            Self::Borrowed(vec) => vec.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -117,7 +183,7 @@ pub struct EncodedPacket {
     pub timestamp: Option<Duration>,
     pub duration: Option<Duration>,
     pub is_keyframe: bool,
-    pub data: MediaBuffer,
+    pub data: MediaStorage,
 }
 
 #[derive(Debug)]
@@ -126,7 +192,7 @@ pub struct DecodedFrame {
     pub width: u32,
     pub height: u32,
     pub timestamp: Option<Duration>,
-    pub data: MediaBuffer,
+    pub data: MediaStorage,
 }
 
 #[derive(Debug)]
@@ -416,6 +482,8 @@ async fn supervise_pipeline_task(
     pipeline: CompiledPipeline,
 ) {
     let mut attempts = 0;
+    #[allow(unused_assignments)]
+    let mut last_success_start: Option<tokio::time::Instant> = None;
 
     loop {
         if cancellation.is_cancelled() {
@@ -438,6 +506,7 @@ async fn supervise_pipeline_task(
         };
 
         publish_status(&inner, &pipeline.id, TaskStatus::Running, None).await;
+        last_success_start = Some(tokio::time::Instant::now());
 
         match run_pipeline_once(
             cancellation.clone(),
@@ -451,36 +520,56 @@ async fn supervise_pipeline_task(
                 publish_status(&inner, &pipeline.id, TaskStatus::Stopped, None).await;
                 break;
             }
-            PipelineLoopExit::Recoverable(message) if attempts < pipeline.recovery.max_restarts => {
-                attempts += 1;
-                publish_status(
-                    &inner,
-                    &pipeline.id,
-                    TaskStatus::Stalled,
-                    Some(message.clone()),
-                )
-                .await;
-                publish_status(
-                    &inner,
-                    &pipeline.id,
-                    TaskStatus::Recovering,
-                    Some(format!("restart attempt {}", attempts)),
-                )
-                .await;
-
-                if let Some(metrics) = inner.metrics.as_ref() {
-                    metrics.record_restart(&pipeline.id, &message).await;
+            PipelineLoopExit::Recoverable(message) => {
+                // If the pipeline ran stably for at least `reset_after`, reset recovery attempts
+                if let Some(start_time) = last_success_start {
+                    if start_time.elapsed() >= pipeline.recovery.reset_after {
+                        attempts = 0;
+                    }
                 }
 
-                tokio::select! {
-                    _ = cancellation.cancelled() => {
-                        publish_status(&inner, &pipeline.id, TaskStatus::Stopped, None).await;
-                        break;
+                if attempts < pipeline.recovery.max_restarts {
+                    attempts += 1;
+                    publish_status(
+                        &inner,
+                        &pipeline.id,
+                        TaskStatus::Stalled,
+                        Some(message.clone()),
+                    )
+                    .await;
+                    publish_status(
+                        &inner,
+                        &pipeline.id,
+                        TaskStatus::Recovering,
+                        Some(format!("restart attempt {}", attempts)),
+                    )
+                    .await;
+
+                    if let Some(metrics) = inner.metrics.as_ref() {
+                        let formatted_message = format!("{:?}: {}", pipeline.recovery.class, message);
+                        metrics.record_restart(&pipeline.id, &formatted_message).await;
                     }
-                    _ = tokio::time::sleep(pipeline.recovery.restart_backoff) => {}
+
+                    let backoff = std::cmp::min(
+                        pipeline.recovery.initial_backoff.mul_f32(
+                            pipeline.recovery.backoff_multiplier.powi(attempts as i32 - 1)
+                        ),
+                        pipeline.recovery.max_backoff,
+                    );
+
+                    tokio::select! {
+                        _ = cancellation.cancelled() => {
+                            publish_status(&inner, &pipeline.id, TaskStatus::Stopped, None).await;
+                            break;
+                        }
+                        _ = tokio::time::sleep(backoff) => {}
+                    }
+                } else {
+                    publish_status(&inner, &pipeline.id, TaskStatus::Failed, Some(message)).await;
+                    break;
                 }
             }
-            PipelineLoopExit::Recoverable(message) | PipelineLoopExit::Fatal(message) => {
+            PipelineLoopExit::Fatal(message) => {
                 publish_status(&inner, &pipeline.id, TaskStatus::Failed, Some(message)).await;
                 break;
             }
@@ -592,7 +681,7 @@ pub mod mock {
 
     use super::{
         async_trait, pending, CompiledPipeline, EncodedPacket, MediaPayload, MediaSink,
-        MediaSource, PipelineContext, RuntimeError, SinkFactory, SourceFactory,
+        MediaSource, MediaStorage, PipelineContext, RuntimeError, SinkFactory, SourceFactory,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,7 +761,7 @@ pub mod mock {
                             timestamp: None,
                             duration: None,
                             is_keyframe: false,
-                            data,
+                            data: MediaStorage::Pooled(data),
                         }));
                     }
                     MockSourceAction::Sleep(duration) => tokio::time::sleep(duration).await,

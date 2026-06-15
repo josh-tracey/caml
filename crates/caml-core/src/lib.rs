@@ -17,8 +17,8 @@ pub use frontend::{
     PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig, Transport,
 };
 pub use runtime::{
-    EncodedPacket, MediaBuffer, MediaPayload, MediaSink, MediaSource, MediaTransform,
-    NoopTransformFactory, PipelineContext, PipelineFactory, PipelineStages, RuntimeAdapters,
+    EncodedPacket, MediaBuffer, MediaPayload, MediaSink, MediaSource, MediaStorage, MediaTransform,
+    NoopTransformFactory, PipelineContext, PipelineFactory, PipelineStages, PoolStats, RuntimeAdapters,
     RuntimeEngine, RuntimeEvent, RuntimeFactory, RuntimeHandle, RuntimeStatus, SinkFactory,
     SourceFactory, TaskStatus, TransformFactory,
 };

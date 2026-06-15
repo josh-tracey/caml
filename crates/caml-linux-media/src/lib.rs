@@ -420,7 +420,7 @@ pipelines:
                 timestamp: Some(Duration::from_millis(1)),
                 duration: Some(Duration::from_millis(33)),
                 is_keyframe: true,
-                data,
+                data: caml_core::MediaStorage::Pooled(data),
             }))
         }
     }

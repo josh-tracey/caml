@@ -19,7 +19,12 @@ The default CI-safe test suite uses fake sysfs/dev roots for capability detectio
 ## Running host-gated tests
 
 ```bash
-CAML_PI_HOST_TESTS=1 cargo test --features pi --test pi_host
+# Run Pi 4 hardware encode flow test
+CAML_PI_HOST_TESTS=1 cargo test --features pi --test pi4_hardware_encode_flow
+
+# Run Pi 5 stateless decode flow test
+CAML_PI_HOST_TESTS=1 cargo test --features pi --test pi5_stateless_decode_flow
 ```
 
 When `CAML_PI_HOST_TESTS` is unset, these tests return early with a skip message so normal development and generic CI remain deterministic.
+

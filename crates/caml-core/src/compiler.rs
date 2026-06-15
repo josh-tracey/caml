@@ -10,8 +10,6 @@ use crate::{
 
 const DEFAULT_PACKET_BUFFER_SIZE: usize = 2_048;
 const DEFAULT_STALL_TIMEOUT_SECS: u64 = 10;
-const DEFAULT_RECOVERY_BACKOFF_MS: u64 = 250;
-const DEFAULT_MAX_RECOVERIES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedInputBackend {
@@ -149,7 +147,7 @@ impl CapabilityProbe for CompositeCapabilityProbe {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledGraph {
     pub system: CompiledSystem,
     pub pipelines: Vec<CompiledPipeline>,
@@ -168,7 +166,7 @@ pub struct ResourcePlan {
     pub estimated_cma_usage_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledPipeline {
     pub id: String,
     pub input: CompiledInput,
@@ -208,11 +206,14 @@ pub struct CompiledProcessingProfile {
     pub rotation: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RecoveryPolicy {
-    pub max_restarts: u32,
-    pub restart_backoff: Duration,
     pub class: RecoveryClass,
+    pub max_restarts: u32,
+    pub initial_backoff: Duration,
+    pub max_backoff: Duration,
+    pub backoff_multiplier: f32,
+    pub reset_after: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,10 +454,37 @@ fn recovery_policy_for(pipeline: &PipelineNode) -> RecoveryPolicy {
         ) => RecoveryClass::Device,
     };
 
+    let (initial_backoff, max_backoff, backoff_multiplier, reset_after, max_restarts) = match class {
+        RecoveryClass::Network => (
+            Duration::from_millis(250),
+            Duration::from_secs(5),
+            2.0,
+            Duration::from_secs(30),
+            5,
+        ),
+        RecoveryClass::Device => (
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+            2.0,
+            Duration::from_secs(60),
+            3,
+        ),
+        RecoveryClass::Hardware => (
+            Duration::from_secs(2),
+            Duration::from_secs(60),
+            2.0,
+            Duration::from_secs(120),
+            3,
+        ),
+    };
+
     RecoveryPolicy {
-        max_restarts: DEFAULT_MAX_RECOVERIES,
-        restart_backoff: Duration::from_millis(DEFAULT_RECOVERY_BACKOFF_MS),
         class,
+        max_restarts,
+        initial_backoff,
+        max_backoff,
+        backoff_multiplier,
+        reset_after,
     }
 }
 

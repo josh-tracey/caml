@@ -1,4 +1,46 @@
-fn open_device_input(
+use std::ffi::CString;
+use std::time::Duration;
+use ffmpeg_next as ffmpeg;
+
+use caml_core::{CompiledProcessingProfile, ResolvedInputBackend};
+
+use crate::h264::{H264Config, normalize_h264_payload};
+
+pub fn open_media_input(
+    input: &str,
+    input_spec: &InputSpec,
+) -> Result<ffmpeg::format::context::Input, String> {
+    match input_spec {
+        InputSpec::Rtsp { transport } => open_rtsp_input(input, *transport),
+        InputSpec::Device {
+            backend,
+            frame_rate,
+        } => open_device_input(input, *backend, *frame_rate),
+    }
+}
+
+pub fn open_rtsp_input(
+    input: &str,
+    transport: caml_core::Transport,
+) -> Result<ffmpeg::format::context::Input, String> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set(
+        "rtsp_transport",
+        match transport {
+            caml_core::Transport::Tcp => "tcp",
+            caml_core::Transport::Udp => "udp",
+        },
+    );
+    options.set("fflags", "nobuffer");
+    options.set("flags", "low_delay");
+    options.set("timeout", "5000000"); // 5 seconds for UDP
+    options.set("stimeout", "5000000"); // 5 seconds for TCP/RTSP
+
+    ffmpeg::format::input_with_dictionary(&input, options)
+        .map_err(|error| format!("unable to open RTSP input '{}': {}", input, error))
+}
+
+pub fn open_device_input(
     input: &str,
     backend: ResolvedInputBackend,
     frame_rate: Option<u32>,
@@ -17,7 +59,7 @@ fn open_device_input(
     }
 }
 
-fn open_auto_device_input(
+pub fn open_auto_device_input(
     input: &str,
     frame_rate: Option<u32>,
 ) -> Result<ffmpeg::format::context::Input, String> {
@@ -35,7 +77,7 @@ fn open_auto_device_input(
     }
 }
 
-fn open_v4l2_device_input(
+pub fn open_v4l2_device_input(
     input: &str,
     frame_rate: Option<u32>,
 ) -> Result<ffmpeg::format::context::Input, String> {
@@ -46,7 +88,7 @@ fn open_v4l2_device_input(
         .map_err(|error| format!("unable to open V4L2 device '{}': {}", input, error))
 }
 
-fn device_input_options(frame_rate: Option<u32>) -> ffmpeg::Dictionary<'static> {
+pub fn device_input_options(frame_rate: Option<u32>) -> ffmpeg::Dictionary<'static> {
     let mut options = ffmpeg::Dictionary::new();
     options.set("fflags", "nobuffer");
     options.set("flags", "low_delay");
@@ -56,7 +98,7 @@ fn device_input_options(frame_rate: Option<u32>) -> ffmpeg::Dictionary<'static> 
     options
 }
 
-fn find_input_format(name: &str) -> Result<ffmpeg::format::format::Input, String> {
+pub fn find_input_format(name: &str) -> Result<ffmpeg::format::format::Input, String> {
     let name = CString::new(name).map_err(|_| {
         format!(
             "input format name '{}' contained an interior null byte",
@@ -74,7 +116,7 @@ fn find_input_format(name: &str) -> Result<ffmpeg::format::format::Input, String
     }
 }
 
-fn best_video_stream<'a>(
+pub fn best_video_stream<'a>(
     context: &'a ffmpeg::format::context::Input,
     input: &str,
 ) -> Result<ffmpeg::format::stream::Stream<'a>, String> {
@@ -84,7 +126,7 @@ fn best_video_stream<'a>(
         .ok_or_else(|| format!("no video stream was found in '{}'", input))
 }
 
-fn codec_name(codec: ffmpeg::codec::Id) -> Result<&'static str, String> {
+pub fn codec_name(codec: ffmpeg::codec::Id) -> Result<&'static str, String> {
     match codec {
         ffmpeg::codec::Id::H264 => Ok("h264"),
         ffmpeg::codec::Id::HEVC => Err(
@@ -97,7 +139,7 @@ fn codec_name(codec: ffmpeg::codec::Id) -> Result<&'static str, String> {
     }
 }
 
-fn frame_duration_from_processing(processing: &CompiledProcessingProfile) -> Option<Duration> {
+pub fn frame_duration_from_processing(processing: &CompiledProcessingProfile) -> Option<Duration> {
     if processing.frame_rate == 0 {
         return None;
     }
@@ -107,7 +149,7 @@ fn frame_duration_from_processing(processing: &CompiledProcessingProfile) -> Opt
     ))
 }
 
-fn duration_from_packet(value: i64, time_base: ffmpeg::Rational) -> Option<Duration> {
+pub fn duration_from_packet(value: i64, time_base: ffmpeg::Rational) -> Option<Duration> {
     if value <= 0 {
         return None;
     }
@@ -115,7 +157,7 @@ fn duration_from_packet(value: i64, time_base: ffmpeg::Rational) -> Option<Durat
     duration_from_time_base(Some(value), time_base)
 }
 
-fn duration_from_time_base(value: Option<i64>, time_base: ffmpeg::Rational) -> Option<Duration> {
+pub fn duration_from_time_base(value: Option<i64>, time_base: ffmpeg::Rational) -> Option<Duration> {
     let ticks = value?;
     if ticks < 0 {
         return None;
@@ -138,7 +180,7 @@ fn duration_from_time_base(value: Option<i64>, time_base: ffmpeg::Rational) -> O
     Some(Duration::from_nanos(nanos as u64))
 }
 
-fn frame_duration_from_rate(rate: ffmpeg::Rational) -> Option<Duration> {
+pub fn frame_duration_from_rate(rate: ffmpeg::Rational) -> Option<Duration> {
     let numerator = i128::from(rate.numerator());
     let denominator = i128::from(rate.denominator());
     if numerator <= 0 || denominator <= 0 {
@@ -155,7 +197,7 @@ fn frame_duration_from_rate(rate: ffmpeg::Rational) -> Option<Duration> {
     Some(Duration::from_nanos(nanos as u64))
 }
 
-fn normalize_encoded_packet(
+pub fn normalize_encoded_packet(
     codec: &str,
     payload: &[u8],
     is_keyframe: bool,
@@ -170,9 +212,7 @@ fn normalize_encoded_packet(
     }
 }
 
-#[derive(Debug, Clone)]
-struct H264Config {
-    nalu_length_size: usize,
-    parameter_sets_annexb: Vec<u8>,
-}
-
+// We import InputSpec from worker, but since we have a circular dependency or reference,
+// let's define InputSpec or use the module reference.
+// Let's use the Worker types. We will import InputSpec from crate::worker.
+use crate::worker::InputSpec;

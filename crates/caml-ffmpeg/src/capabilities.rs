@@ -14,34 +14,29 @@ pub fn ffmpeg_capabilities() -> StaticCapabilityProbe {
 
     let mut caps = HostCapabilities {
         ffmpeg_available: true,
-        rtp_packetization_available: false, // Wait, maybe it is available?
-        ..HostCapabilities::default()
+        v4l2_available: false,
+        libcamera_available: false,
+        rtp_packetization_available: false,
+        pi_model: None,
+        has_pi4_h264_encoder: false,
+        has_pi5_stateless_decoder: false,
     };
-    
-    // Check for encoders
-    if ffmpeg::encoder::find_by_name("libx264").is_some() || ffmpeg::encoder::find(ffmpeg::codec::Id::H264).is_some() {
-        // has software h264
-    }
-    
+
+    // Probe deep ffmpeg capabilities
     if ffmpeg::encoder::find_by_name("h264_v4l2m2m").is_some() {
-        // has v4l2m2m hardware encode
+        caps.has_pi4_h264_encoder = true;
     }
 
-    if ffmpeg::decoder::find_by_name("h264_v4l2request").is_some() {
-        // has v4l2request hardware decode
+    if ffmpeg::decoder::find_by_name("h264_v4l2request").is_some()
+        || ffmpeg::decoder::find_by_name("hevc_v4l2request").is_some()
+    {
+        caps.has_pi5_stateless_decoder = true;
     }
 
-    if ffmpeg::decoder::find_by_name("hevc_v4l2request").is_some() {
-        // has hevc hardware decode
-    }
-    
-    // Check input devices
-    if ffmpeg::format::input::by_name("video4linux2").is_some() {
-        // has v4l2 capture
+    let v4l2_name = std::ffi::CString::new("video4linux2").unwrap();
+    if unsafe { !ffmpeg::ffi::av_find_input_format(v4l2_name.as_ptr()).is_null() } {
+        caps.v4l2_available = true;
     }
 
-    // You would update the HostCapabilities struct to hold these fine-grained capabilities.
-    // For now we return the basic one matching previous behavior, but populated.
-    
     StaticCapabilityProbe::new(caps)
 }

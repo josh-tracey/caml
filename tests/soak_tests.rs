@@ -36,7 +36,9 @@ pipelines:
     if let Some(pipeline) = compiled.pipelines.first_mut() {
         pipeline.runtime.watchdog_timeout = Duration::from_millis(10);
         pipeline.recovery.max_restarts = 5;
-        pipeline.recovery.restart_backoff = Duration::from_millis(5);
+        pipeline.recovery.initial_backoff = Duration::from_millis(5);
+        pipeline.recovery.max_backoff = Duration::from_millis(5);
+        pipeline.recovery.backoff_multiplier = 1.0;
     }
 
     // We simulate a flaky 24-hour stream by rapidly stalling the mock network stream and triggering watchdogs

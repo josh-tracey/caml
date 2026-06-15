@@ -1,4 +1,3 @@
-use std::fmt;
 
 use caml_core::RuntimeError;
 use ffmpeg_next::Error as FfmpegError;

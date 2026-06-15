@@ -8,6 +8,8 @@ async-trait = "0.1"
 caml-core = { path = "../caml-core", version = "1.0.0" }
 ffmpeg-next = "8.1"
 tokio = { version = "1.38", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
+
