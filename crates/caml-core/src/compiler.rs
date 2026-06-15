@@ -62,8 +62,6 @@ pub struct HostCapabilities {
     pub has_pi5_stateless_decoder: bool,
 }
 
-
-
 impl HostCapabilities {
     pub fn merge(&self, other: &Self) -> Result<Self, CompileError> {
         let pi_model = match (self.pi_model, other.pi_model) {

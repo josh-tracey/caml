@@ -24,7 +24,8 @@ impl PipelineFactory for BuiltinAdapters {
         &self,
         pipeline: &CompiledPipeline,
     ) -> Result<PipelineStages, RuntimeError> {
-        let source_res: Result<Box<dyn MediaSource>, RuntimeError> = match pipeline.resolved_backend {
+        let source_res: Result<Box<dyn MediaSource>, RuntimeError> = match pipeline.resolved_backend
+        {
             caml_core::ResolvedInputBackend::FfmpegRtsp
             | caml_core::ResolvedInputBackend::AutoDevice
             | caml_core::ResolvedInputBackend::V4l2Device => {
@@ -33,7 +34,9 @@ impl PipelineFactory for BuiltinAdapters {
                     if let Some(factory) = &self.ffmpeg_source {
                         caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await
                     } else {
-                        Err(RuntimeError::adapter("ffmpeg source factory not configured"))
+                        Err(RuntimeError::adapter(
+                            "ffmpeg source factory not configured",
+                        ))
                     }
                 }
                 #[cfg(not(feature = "ffmpeg"))]
@@ -47,7 +50,9 @@ impl PipelineFactory for BuiltinAdapters {
                     if let Some(factory) = &self.libcamera_source {
                         caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await
                     } else {
-                        Err(RuntimeError::adapter("libcamera provider factory not configured"))
+                        Err(RuntimeError::adapter(
+                            "libcamera provider factory not configured",
+                        ))
                     }
                 }
                 #[cfg(not(feature = "pi"))]
