@@ -5,6 +5,9 @@ use std::{
 
 use caml_core::{CapabilityProbe, CompileError, HardwareTarget, HostCapabilities, PiModel};
 
+#[cfg(target_os = "linux")]
+pub mod camera;
+
 #[derive(Debug, Clone)]
 pub struct LinuxCapabilityProbe {
     root: PathBuf,

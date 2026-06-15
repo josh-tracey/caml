@@ -59,6 +59,27 @@ pub struct NetworkProfile {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutputProfile {
+    WebrtcRtp {
+        codec: Option<String>,
+        payload_type: Option<u8>,
+        mtu: Option<usize>,
+        ssrc: Option<String>,
+        clock_rate: Option<u32>,
+    },
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureProfile {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: String,
+    pub frame_rate: u32,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessingProfile {
     pub codec: String,
@@ -80,7 +101,10 @@ pub struct PipelineNode {
     pub strategy: StreamStrategy,
     pub backend: Option<InputBackend>,
     pub network: Option<NetworkProfile>,
+    pub capture: Option<CaptureProfile>,
     pub processing: Option<ProcessingProfile>,
+    #[serde(default)]
+    pub outputs: Vec<OutputProfile>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -93,6 +117,7 @@ pub struct SystemConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CamlManifest {
+    pub version: Option<u32>,
     pub system: SystemConfig,
     pub pipelines: Vec<PipelineNode>,
 }

@@ -28,6 +28,10 @@ pub struct RuntimeBuilder {
     compiled: Option<CompiledGraph>,
     capability_probe: Option<Arc<dyn CapabilityProbe>>,
     runtime_factory: Option<RuntimeFactory>,
+    #[cfg(feature = "webrtc")]
+    webrtc_tracks: std::collections::HashMap<String, Arc<caml_webrtc::TrackLocalStaticRTP>>,
+    #[cfg(feature = "pi")]
+    libcamera_provider_factory: Option<Arc<dyn caml_linux_media::LibcameraProviderFactory>>,
 }
 
 impl RuntimeBuilder {
@@ -84,6 +88,57 @@ impl RuntimeBuilder {
         self
     }
 
+    #[cfg(feature = "webrtc")]
+    pub fn with_webrtc_track(
+        mut self,
+        pipeline_id: impl Into<String>,
+        track: Arc<caml_webrtc::TrackLocalStaticRTP>,
+    ) -> Self {
+        self.webrtc_tracks.insert(pipeline_id.into(), track);
+        self
+    }
+
+    #[cfg(feature = "pi")]
+    pub fn with_libcamera_provider_factory(
+        mut self,
+        provider_factory: Arc<dyn caml_linux_media::LibcameraProviderFactory>,
+    ) -> Self {
+        self.libcamera_provider_factory = Some(provider_factory);
+        self
+    }
+
+    #[cfg(any(feature = "ffmpeg", feature = "pi", feature = "webrtc"))]
+    pub fn with_feature_media_adapters(mut self) -> Self {
+        let mut adapters = crate::adapters::BuiltinAdapters::default();
+
+        #[cfg(feature = "ffmpeg")]
+        {
+            adapters.ffmpeg_source = Some(Arc::new(caml_ffmpeg::FfmpegSourceFactory::new()));
+        }
+
+        #[cfg(feature = "pi")]
+        {
+            if let Some(factory) = &self.libcamera_provider_factory {
+                adapters.libcamera_source = Some(Arc::new(
+                    caml_linux_media::LibcameraSourceFactory::new(factory.clone()),
+                ));
+            }
+        }
+
+        #[cfg(feature = "webrtc")]
+        {
+            for (pipeline_id, track) in &self.webrtc_tracks {
+                adapters.webrtc_sinks.insert(
+                    pipeline_id.clone(),
+                    Arc::new(caml_webrtc::WebRtcSinkFactory::new(track.clone())),
+                );
+            }
+        }
+
+        self.runtime_factory = Some(caml_core::RuntimeFactory::new(Arc::new(adapters)));
+        self
+    }
+
     pub fn with_runtime_factory<F>(mut self, runtime_factory: F) -> Self
     where
         F: Into<RuntimeFactory>,
@@ -129,6 +184,6 @@ impl RuntimeBuilder {
             .runtime_factory
             .ok_or(RuntimeBuilderError::MissingRuntimeFactory)?;
 
-        Ok(RuntimeEngine::start(compiled, runtime_factory).await?)
+        Ok(RuntimeEngine::start(compiled, runtime_factory, None).await?)
     }
 }

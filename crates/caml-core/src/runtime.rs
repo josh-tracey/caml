@@ -241,6 +241,7 @@ pub struct RuntimeAdapters {
     pub source_factory: Arc<dyn SourceFactory>,
     pub transform_factory: Arc<dyn TransformFactory>,
     pub sink_factory: Arc<dyn SinkFactory>,
+    pub metrics_exporter: Arc<dyn crate::metrics::MetricsExporter>,
 }
 
 impl RuntimeAdapters {
@@ -249,11 +250,17 @@ impl RuntimeAdapters {
             source_factory,
             transform_factory: Arc::new(NoopTransformFactory),
             sink_factory,
+            metrics_exporter: Arc::new(crate::metrics::NoopMetricsExporter),
         }
     }
 
     pub fn with_transform_factory(mut self, transform_factory: Arc<dyn TransformFactory>) -> Self {
         self.transform_factory = transform_factory;
+        self
+    }
+
+    pub fn with_metrics_exporter(mut self, exporter: Arc<dyn crate::metrics::MetricsExporter>) -> Self {
+        self.metrics_exporter = exporter;
         self
     }
 }
@@ -298,7 +305,11 @@ impl From<Arc<dyn PipelineFactory>> for RuntimeFactory {
 pub struct RuntimeEngine;
 
 impl RuntimeEngine {
-    pub async fn start<F>(graph: CompiledGraph, factory: F) -> Result<RuntimeHandle, RuntimeError>
+    pub async fn start<F>(
+        graph: CompiledGraph,
+        factory: F,
+        metrics: Option<Arc<dyn crate::metrics::MetricsExporter>>
+    ) -> Result<RuntimeHandle, RuntimeError>
     where
         F: Into<RuntimeFactory>,
     {
@@ -314,6 +325,7 @@ impl RuntimeEngine {
             statuses: RwLock::new(initial_statuses),
             events_tx,
             join_handles: Mutex::new(Vec::with_capacity(graph.pipelines.len())),
+            metrics,
         });
 
         for pipeline in graph.pipelines {
@@ -383,6 +395,7 @@ struct RuntimeHandleInner {
     statuses: RwLock<BTreeMap<String, TaskStatus>>,
     events_tx: broadcast::Sender<RuntimeEvent>,
     join_handles: Mutex<Vec<JoinHandle<()>>>,
+    metrics: Option<Arc<dyn crate::metrics::MetricsExporter>>,
 }
 
 #[derive(Debug)]
@@ -423,7 +436,7 @@ async fn supervise_pipeline_task(
 
         publish_status(&inner, &pipeline.id, TaskStatus::Running, None).await;
 
-        match run_pipeline_once(cancellation.clone(), &pipeline, stages).await {
+        match run_pipeline_once(cancellation.clone(), &pipeline, stages, inner.metrics.clone()).await {
             PipelineLoopExit::Cancelled | PipelineLoopExit::EndOfStream => {
                 publish_status(&inner, &pipeline.id, TaskStatus::Stopped, None).await;
                 break;
@@ -444,6 +457,10 @@ async fn supervise_pipeline_task(
                     Some(format!("restart attempt {}", attempts)),
                 )
                 .await;
+                
+                if let Some(metrics) = inner.metrics.as_ref() {
+                    metrics.record_restart(&pipeline.id, &message).await;
+                }
 
                 tokio::select! {
                     _ = cancellation.cancelled() => {
@@ -465,6 +482,7 @@ async fn run_pipeline_once(
     cancellation: CancellationToken,
     pipeline: &CompiledPipeline,
     mut stages: PipelineStages,
+    metrics: Option<Arc<dyn crate::metrics::MetricsExporter>>,
 ) -> PipelineLoopExit {
     let mut context = PipelineContext {
         pipeline: pipeline.clone(),
@@ -477,7 +495,12 @@ async fn run_pipeline_once(
             result = timeout(pipeline.runtime.watchdog_timeout, stages.source.next(&mut context)) => {
                 match result {
                     Ok(Ok(payload)) => payload,
-                    Ok(Err(error)) => return pipeline_exit_from_error(error),
+                    Ok(Err(error)) => {
+                        if let Some(m) = &metrics {
+                            m.record_stream_error(&pipeline.id, &error.to_string()).await;
+                        }
+                        return pipeline_exit_from_error(error);
+                    }
                     Err(_) => {
                         return PipelineLoopExit::Recoverable(format!(
                             "no media received within {:?}",
@@ -488,6 +511,12 @@ async fn run_pipeline_once(
             }
         };
 
+        if let Some(metrics) = &metrics {
+            if let Some(data) = payload.data() {
+                metrics.record_throughput(&pipeline.id, data.len()).await;
+            }
+        }
+
         if matches!(payload, MediaPayload::EndOfStream) {
             return PipelineLoopExit::EndOfStream;
         }
@@ -495,11 +524,19 @@ async fn run_pipeline_once(
         for transform in &mut stages.transforms {
             match transform.transform(payload, &mut context).await {
                 Ok(transformed) => payload = transformed,
-                Err(error) => return pipeline_exit_from_error(error),
+                Err(error) => {
+                    if let Some(m) = &metrics {
+                        m.record_stream_error(&pipeline.id, &error.to_string()).await;
+                    }
+                    return pipeline_exit_from_error(error);
+                }
             }
         }
 
         if let Err(error) = stages.sink.consume(payload, &mut context).await {
+            if let Some(m) = &metrics {
+                m.record_stream_error(&pipeline.id, &error.to_string()).await;
+            }
             return pipeline_exit_from_error(error);
         }
     }
@@ -555,14 +592,14 @@ pub mod mock {
         EndOfStream,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Clone)]
     pub struct MockSourcePlan {
-        actions: Vec<MockSourceAction>,
+        actions: std::sync::Arc<std::sync::Mutex<VecDeque<MockSourceAction>>>,
     }
 
     impl MockSourcePlan {
         pub fn new(actions: Vec<MockSourceAction>) -> Self {
-            Self { actions }
+            Self { actions: std::sync::Arc::new(std::sync::Mutex::new(VecDeque::from(actions))) }
         }
     }
 
@@ -588,13 +625,13 @@ pub mod mock {
             })?;
 
             Ok(Box::new(MockSource {
-                actions: VecDeque::from(plan.actions),
+                actions: plan.actions.clone(),
             }))
         }
     }
 
     struct MockSource {
-        actions: VecDeque<MockSourceAction>,
+        actions: std::sync::Arc<std::sync::Mutex<VecDeque<MockSourceAction>>>,
     }
 
     #[async_trait]
@@ -604,7 +641,10 @@ pub mod mock {
             context: &mut PipelineContext,
         ) -> Result<MediaPayload, RuntimeError> {
             loop {
-                let action = self.actions.pop_front().ok_or_else(|| {
+                let action = {
+                    let mut lock = self.actions.lock().unwrap();
+                    lock.pop_front()
+                }.ok_or_else(|| {
                     RuntimeError::source("mock source exhausted its scripted actions")
                 })?;
 
@@ -625,7 +665,7 @@ pub mod mock {
                         pending::<()>().await;
                         unreachable!("pending future never resolves")
                     }
-                    MockSourceAction::Fail(message) => return Err(RuntimeError::source(message)),
+                    MockSourceAction::Fail(message) => return Err(RuntimeError::recoverable(message)),
                     MockSourceAction::EndOfStream => return Ok(MediaPayload::EndOfStream),
                 }
             }

@@ -28,6 +28,7 @@ caml-webrtc = { path = "crates/caml-webrtc", version = "1.0.0", optional = true 
 caml-linux-media = { path = "crates/caml-linux-media", version = "1.0.0", optional = true }
 thiserror = "2.0"
 tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
 
 [dev-dependencies]
 async-trait = "0.1"

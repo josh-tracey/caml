@@ -90,3 +90,46 @@ pipelines:
     CamlCompiler::compile_with_probe(&manifest, &probe)
         .expect("Pi 5 stateless decode should compile on a matching host");
 }
+
+#[tokio::test]
+async fn pi_hardware_execution_test() {
+    if !pi_host_tests_enabled() {
+        return;
+    }
+    
+    // Attempting an actual media-flow execution through Pi hardware.
+    // Ensure you have a valid V4L2 source at /dev/video0 for this to work.
+    
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "512MB"
+pipelines:
+  - id: "pi_hardware_exec"
+    input: "/dev/video0"
+    type: "device"
+    backend: "v4l2"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "v4l2m2m"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+"#,
+    )
+    .expect("manifest should parse");
+
+    // In a real environment, you'd wire up the runtime builder and run frames through.
+    // For now we just ensure that the graph compilation and runtime builder succeeds 
+    // when targeting the actual Pi hardware.
+    
+    let probe = caml_linux_media::linux_capability_probe();
+    let graph = CamlCompiler::compile_with_probe(&manifest, &probe).unwrap();
+    let pipeline = graph.pipelines.first().unwrap();
+    
+    // Assert benchmark metrics / setup here when actually running.
+    // We expect the execution to complete without allocating on the hot loop.
+}

@@ -24,6 +24,12 @@ pub fn ffmpeg_capabilities() -> StaticCapabilityProbe {
 #[derive(Clone, Default)]
 pub struct FfmpegSourceFactory;
 
+impl FfmpegSourceFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
 #[async_trait]
 impl SourceFactory for FfmpegSourceFactory {
     async fn build_source(
@@ -795,6 +801,9 @@ fn open_rtsp_input(
     );
     options.set("fflags", "nobuffer");
     options.set("flags", "low_delay");
+    options.set("timeout", "5000000"); // 5 seconds for UDP
+    options.set("stimeout", "5000000"); // 5 seconds for TCP/RTSP
+
 
     ffmpeg::format::input_with_dictionary(&input, options)
         .map_err(|error| format!("unable to open RTSP input '{}': {}", input, error))
@@ -1389,6 +1398,7 @@ mod tests {
                 source: "rtsp://127.0.0.1:8554/live".to_string(),
             },
             strategy: StreamStrategy::Transcode,
+            outputs: vec![],
             network: Some(caml_core::CompiledNetworkProfile {
                 transport: Transport::Tcp,
                 packet_size_limit: 1200,
@@ -1411,6 +1421,7 @@ mod tests {
             execution_mode: ExecutionMode::DecodedFrames,
             codec_path: CodecPath::SoftwareTranscode,
             recovery: RecoveryPolicy {
+                class: caml_core::RecoveryClass::Device,
                 max_restarts: 0,
                 restart_backoff: Duration::from_millis(1),
             },

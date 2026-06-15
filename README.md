@@ -196,3 +196,17 @@ The next implementation milestone is:
 3. Extend the host-gated Pi tests from probe-backed compile-time guardrails into full media-flow execution coverage for Pi 4 hardware encode and Pi 5 hardware decode
 
 That path now has a concrete workspace structure and runtime contract to land into, instead of another round of aspirational prose.
+
+## Claim Checklist
+
+As part of our commitment to hardware honesty, this checklist maps `caml`'s bold architectural claims to the tests or benchmarks that prove them. **No claim is considered implemented unless linked here.**
+
+- [ ] **No Subprocess Orchestration**: Enforced by static analysis in `tests/no_subprocess.rs`. Backends (FFmpeg, WebRTC, Libcamera) use native bindings.
+- [ ] **Memory Model & Bounded Allocation**: Hot-path allocation ceilings are verified by `tests/hot_path_alloc.rs`.
+- [ ] **RTSP Passthrough to WebRTC RTP**: Proven end-to-end.
+- [ ] **Native Libcamera Provider**: Host-backed test in `tests/libcamera_host.rs` (or equivalent) using real V4L2/libcamera endpoints.
+- [ ] **Pi 4 Hardware Encode Execution**: Tested via `CAML_PI_HOST_TESTS=1` against real hardware.
+- [ ] **Pi 5 Stateless Decode Execution**: Tested via `CAML_PI_HOST_TESTS=1` against real hardware.
+- [ ] **Class-Specific Recovery & Observability**: Tested via soak and chaos recovery tests.
+
+*(Performance claims and zero-copy semantics will link to benchmark artifacts as they are finalized.)*
