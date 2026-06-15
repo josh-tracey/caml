@@ -46,7 +46,7 @@ pub enum CapabilityRequirement {
     Ffmpeg,
     V4l2,
     Libcamera,
-    WebRtcPacketization,
+    RtpPacketization,
     Pi4HardwareEncoder,
     Pi5StatelessDecoder,
 }
@@ -56,7 +56,7 @@ pub struct HostCapabilities {
     pub ffmpeg_available: bool,
     pub v4l2_available: bool,
     pub libcamera_available: bool,
-    pub webrtc_packetization_available: bool,
+    pub rtp_packetization_available: bool,
     pub pi_model: Option<PiModel>,
     pub has_pi4_h264_encoder: bool,
     pub has_pi5_stateless_decoder: bool,
@@ -68,7 +68,7 @@ impl Default for HostCapabilities {
             ffmpeg_available: false,
             v4l2_available: false,
             libcamera_available: false,
-            webrtc_packetization_available: false,
+            rtp_packetization_available: false,
             pi_model: None,
             has_pi4_h264_encoder: false,
             has_pi5_stateless_decoder: false,
@@ -93,8 +93,8 @@ impl HostCapabilities {
             ffmpeg_available: self.ffmpeg_available || other.ffmpeg_available,
             v4l2_available: self.v4l2_available || other.v4l2_available,
             libcamera_available: self.libcamera_available || other.libcamera_available,
-            webrtc_packetization_available: self.webrtc_packetization_available
-                || other.webrtc_packetization_available,
+            rtp_packetization_available: self.rtp_packetization_available
+                || other.rtp_packetization_available,
             pi_model,
             has_pi4_h264_encoder: self.has_pi4_h264_encoder || other.has_pi4_h264_encoder,
             has_pi5_stateless_decoder: self.has_pi5_stateless_decoder
@@ -225,6 +225,14 @@ pub struct CompiledProcessingProfile {
 pub struct RecoveryPolicy {
     pub max_restarts: u32,
     pub restart_backoff: Duration,
+    pub class: RecoveryClass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryClass {
+    Network,
+    Device,
+    Hardware,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,11 +431,33 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         resolved_backend: resolve_backend(pipeline),
         execution_mode: resolve_execution_mode(pipeline.strategy),
         codec_path: resolve_codec_path(pipeline),
-        recovery: RecoveryPolicy {
-            max_restarts: DEFAULT_MAX_RECOVERIES,
-            restart_backoff: Duration::from_millis(DEFAULT_RECOVERY_BACKOFF_MS),
-        },
+        recovery: recovery_policy_for(pipeline),
         capability_requirements: capability_requirements_for(pipeline),
+    }
+}
+
+fn recovery_policy_for(pipeline: &PipelineNode) -> RecoveryPolicy {
+    let class = match (
+        pipeline.input_type,
+        pipeline.strategy,
+        pipeline.backend.unwrap_or(InputBackend::Auto),
+    ) {
+        (_, StreamStrategy::HardwareDecode, _) => RecoveryClass::Hardware,
+        (InputType::Rtsp, _, _) => RecoveryClass::Network,
+        (
+            InputType::Device,
+            _,
+            InputBackend::V4l2
+            | InputBackend::Libcamera
+            | InputBackend::Auto
+            | InputBackend::Ffmpeg,
+        ) => RecoveryClass::Device,
+    };
+
+    RecoveryPolicy {
+        max_restarts: DEFAULT_MAX_RECOVERIES,
+        restart_backoff: Duration::from_millis(DEFAULT_RECOVERY_BACKOFF_MS),
+        class,
     }
 }
 
@@ -503,7 +533,7 @@ fn capability_requirements_for(pipeline: &PipelineNode) -> Vec<CapabilityRequire
     }
 
     if matches!(pipeline.strategy, StreamStrategy::Passthrough) {
-        requirements.push(CapabilityRequirement::WebRtcPacketization);
+        requirements.push(CapabilityRequirement::RtpPacketization);
     }
 
     if matches!(resolve_codec_path(pipeline), CodecPath::HardwareTranscode) {
@@ -542,11 +572,11 @@ impl CapabilityRequirement {
                     pipeline_id
                 )),
             ),
-            CapabilityRequirement::WebRtcPacketization
-                if !capabilities.webrtc_packetization_available =>
+            CapabilityRequirement::RtpPacketization
+                if !capabilities.rtp_packetization_available =>
             {
                 Err(CompileError::UnsupportedCapability(format!(
-                    "pipeline '{}' requires WebRTC packetization support but none was detected",
+                    "pipeline '{}' requires RTP packetization support but none was detected",
                     pipeline_id
                 )))
             }

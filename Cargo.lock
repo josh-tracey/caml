@@ -270,7 +270,9 @@ dependencies = [
 name = "caml-linux-media"
 version = "1.0.0"
 dependencies = [
+ "async-trait",
  "caml-core",
+ "tokio",
 ]
 
 [[package]]
