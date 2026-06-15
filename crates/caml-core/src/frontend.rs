@@ -40,6 +40,15 @@ pub enum Transport {
     Udp,
 }
 
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputBackend {
+    Auto,
+    Ffmpeg,
+    V4l2,
+    Libcamera,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkProfile {
@@ -69,6 +78,7 @@ pub struct PipelineNode {
     #[serde(rename = "type")]
     pub input_type: InputType,
     pub strategy: StreamStrategy,
+    pub backend: Option<InputBackend>,
     pub network: Option<NetworkProfile>,
     pub processing: Option<ProcessingProfile>,
 }
@@ -131,11 +141,28 @@ impl CamlManifest {
                         )));
                     }
                 }
-                StreamStrategy::HardwareDecode => {}
+                StreamStrategy::HardwareDecode => {
+                    if pipeline.processing.is_none() {
+                        return Err(ManifestError::Validation(format!(
+                            "pipeline '{}' uses hardware_decode and requires a processing profile",
+                            pipeline.id
+                        )));
+                    }
+                }
             }
 
             match pipeline.input_type {
-                InputType::Rtsp => validate_rtsp_input(&pipeline.id, &pipeline.input)?,
+                InputType::Rtsp => {
+                    if let Some(backend) = pipeline.backend {
+                        if !matches!(backend, InputBackend::Auto | InputBackend::Ffmpeg) {
+                            return Err(ManifestError::Validation(format!(
+                                "pipeline '{}' uses an rtsp input and only supports 'auto' or 'ffmpeg' backends",
+                                pipeline.id
+                            )));
+                        }
+                    }
+                    validate_rtsp_input(&pipeline.id, &pipeline.input)?;
+                }
                 InputType::Device => validate_device_input(&pipeline.id, &pipeline.input)?,
             }
         }

@@ -1,4 +1,9 @@
-use caml::{CamlCompiler, CamlManifest, CompileError};
+use std::sync::Arc;
+
+use caml::{
+    CamlCompiler, CamlManifest, CompileError, CompositeCapabilityProbe, HostCapabilities, PiModel,
+    StaticCapabilityProbe,
+};
 
 #[test]
 fn rejects_duplicate_pipeline_ids() {
@@ -88,5 +93,146 @@ pipelines:
     assert_eq!(
         compiled.pipelines[0].runtime.watchdog_timeout,
         std::time::Duration::from_secs(5)
+    );
+    assert_eq!(
+        compiled.pipelines[0].resolved_backend,
+        caml::ResolvedInputBackend::FfmpegRtsp
+    );
+    assert_eq!(
+        compiled.pipelines[0].execution_mode,
+        caml::ExecutionMode::EncodedPackets
+    );
+}
+
+#[test]
+fn rejects_capability_requirements_when_probe_disagrees() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "v4l2_device"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    backend: "v4l2"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let probe = StaticCapabilityProbe::new(HostCapabilities::default());
+    let error = CamlCompiler::compile_with_probe(&manifest, &probe)
+        .expect_err("compile should reject missing V4L2 capability");
+
+    assert!(matches!(error, CompileError::UnsupportedCapability(_)));
+    assert!(error.to_string().contains("V4L2"));
+}
+
+#[test]
+fn merges_capabilities_from_multiple_probes() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "rtsp_passthrough"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "passthrough"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
+"#,
+    )
+    .expect("manifest should parse");
+
+    let mut probe = CompositeCapabilityProbe::new();
+    probe.push(Arc::new(StaticCapabilityProbe::new(HostCapabilities {
+        ffmpeg_available: true,
+        ..HostCapabilities::default()
+    })));
+    probe.push(Arc::new(StaticCapabilityProbe::new(HostCapabilities {
+        webrtc_packetization_available: true,
+        ..HostCapabilities::default()
+    })));
+
+    let compiled =
+        CamlCompiler::compile_with_probe(&manifest, &probe).expect("merged probe should compile");
+    assert_eq!(compiled.pipelines.len(), 1);
+}
+
+#[test]
+fn rejects_pi_target_when_probe_detects_a_different_pi_model() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "RASPBERRY_PI_5"
+  cma_allocation_limit: "256MB"
+pipelines:
+  - id: "decode_pipeline"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "hardware_decode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let probe = StaticCapabilityProbe::new(HostCapabilities {
+        ffmpeg_available: true,
+        pi_model: Some(PiModel::Pi4),
+        has_pi5_stateless_decoder: true,
+        ..HostCapabilities::default()
+    });
+
+    let error = CamlCompiler::compile_with_probe(&manifest, &probe)
+        .expect_err("mismatched Pi host should fail");
+    assert!(matches!(error, CompileError::UnsupportedCapability(_)));
+    assert!(error.to_string().contains("detected a Raspberry Pi 4 host"));
+}
+
+#[test]
+fn compiles_hardware_decode_with_processing_profile() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "RASPBERRY_PI_5"
+  cma_allocation_limit: "256MB"
+pipelines:
+  - id: "decode_pipeline"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "hardware_decode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let compiled = CamlCompiler::compile(&manifest).expect("compiler should succeed");
+    assert_eq!(
+        compiled.pipelines[0].codec_path,
+        caml::CodecPath::HardwareDecode
     );
 }

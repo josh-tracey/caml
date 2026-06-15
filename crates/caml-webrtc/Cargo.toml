@@ -1,0 +1,14 @@
+[package]
+name = "caml-webrtc"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1.10"
+caml-core = { path = "../caml-core", version = "1.0.0" }
+rtp = "0.17"
+webrtc = "0.17"
+
+[dev-dependencies]
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "sync"] }

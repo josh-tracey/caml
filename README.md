@@ -1,160 +1,196 @@
-# caml ── Camera Architecture Markup Language
+# caml
 
-`caml` is a hardware-aware, declarative pipeline compiler and native runtime written in Rust. It eliminates the orchestration boilerplate, context-switching overhead, and process-thrashing typical of embedded video streaming systems on single-board computers like the Raspberry Pi 4 and Pi 5.
+`caml` is a Rust workspace for compiling declarative camera/media manifests into supervised runtime graphs. The repository now has a real split between a stable core crate and feature-gated media backend crates, so the public `caml` facade can grow toward native FFmpeg, WebRTC, and Raspberry Pi media paths without burying those concerns inside one monolithic crate.
 
-Instead of spawning heavy `ffmpeg` or `libcamera` child processes, wrapping shell commands, and routing raw data over local loopback network interfaces, `caml` parses a simple, human-readable manifest file and compiles it directly into an optimized, user-space asynchronous media graph.
+## Current Status
 
----
+What is implemented today:
 
-## Core Ethos & Design Principles
+- Strict YAML manifest parsing with typed enums, unit parsing, and structural validation
+- Graph compilation into a runtime-ready topology with backend resolution, execution mode selection, recovery policy, and capability requirements
+- A staged async runtime that supports `source -> transform(s) -> sink`, preallocated buffer pooling, observable task status, and supervised stall recovery
+- A public `RuntimeBuilder` facade in the top-level `caml` crate
+- Feature-gated backend crates for FFmpeg, WebRTC, and Linux/Pi capability probing
+- Concrete FFmpeg media paths: RTSP H.264 passthrough, RTSP/V4L2 software H.264 transcode, and Pi-aware codec selection for Pi 4 hardware encode plus Pi 5 stateless hardware decode
+- Linux/Pi capability probing that detects Pi model, V4L2/libcamera availability, Pi 4 encode nodes, and Pi 5 stateless decode topology for compile-time guardrails
 
-Production video streaming on edge hardware shouldn't rely on fragile string parsing or shell abstractions. `caml` is engineered around three baseline tenets:
+What is not complete yet:
 
-* **Zero Process Forks (Pure FFI):** The runtime links directly to the underlying shared C multimedia libraries (`libavcodec`, `libavformat`, `libavutil`, `libswscale`) via safe Rust bindings. All networking, demuxing, and frame extraction loops run natively inside the application's user-space memory layout.
-* **Hardware Honesty:** The compiler enforces physical silicon realities at compile time. If a chip lacks a hardware encoder block (like the Broadcom BCM2712 on the Raspberry Pi 5), the compiler rejects the layout configuration *before* it can deploy, preventing silent runtime failures.
-* **Single-Allocation Pipelines:** To completely eliminate heap fragmentation and allocation thrashing, memory buffers are declared once at startup and recycled over non-blocking asynchronous execution channels.
+- Libcamera-backed device capture
+- adapter-specific recovery tuning and validation beyond the RTSP/FFmpeg path
+- host-backed integration coverage for Pi hardware execution paths
 
----
+The repository is no longer pretending those pieces already exist in production form. The workspace and APIs are now shaped to support them cleanly.
 
-## The Network Loopback Bottleneck vs. Native FFI
+## Workspace Layout
 
-Traditional architectures utilize a process-wrapper pattern that introduces a massive internal performance penalty:
+The repo is split into these crates:
 
+- `caml`: public facade, re-exports, and `RuntimeBuilder`
+- `caml-core`: manifest parsing, compilation, capability modeling, and staged runtime supervision
+- `caml-ffmpeg`: feature-gated FFmpeg ingest backend
+- `caml-webrtc`: feature-gated WebRTC RTP sink backend
+- `caml-linux-media`: Linux and Raspberry Pi capability probing shell
+
+## Supported Build Tiers
+
+### Default build
+
+The default build is self-contained and compiles without FFmpeg or Linux-specific media dependencies:
+
+```bash
+cargo test
 ```
-[ Traditional ] : Camera Feed ──► External FFmpeg Process ──► UDP Loopback (127.0.0.1) ──► Runtime Socket ──► WebRTC Out
-[ caml Native ] : Camera Feed ──► Direct FFI Memory Context ───────────────────────────────────────────────► WebRTC Out
 
+This tier is intended for parser/compiler/runtime development and for applications that want to plug in custom source/sink backends.
+
+### Feature-gated media backends
+
+The backend crates can be enabled together:
+
+```bash
+cargo check --features ffmpeg,webrtc,pi
 ```
 
-### Why the Native FFI Path Wins:
+Today, these crates can cover concrete Linux media slices:
 
-1. **Zero Pipe Bottlenecks:** Process-wrapper systems pipe raw video data across standard I/O channels or local UDP loopbacks, forcing the kernel to continuously copy video blocks across memory spaces. `caml` opens and reads input streams directly inside its own memory space.
-2. **Granular Memory Control:** By talking directly to the underlying C structures, `caml` directly exposes the Raspberry Pi 5’s stateless V4L2 decoding pipelines. Frames are processed inside hardware-allocated memory regions (`DRM_PRIME` / `SAND` formats) rather than down-sampling blindly through system RAM.
-3. **Synchronous Error Catching:** Instead of scraping text from an external process's standard error stream to diagnose dropouts, `caml` captures explicit error codes (`AVERROR`) natively returned across the FFI boundary, triggering immediate, clean recovery paths.
+- H.264 passthrough through FFmpeg and RTP packetization into a WebRTC track sink
+- software H.264 transcode for RTSP and V4L2 device video with optional 90/180/270-degree rotation
+- Pi 4 hardware-backed H.264 encode selection through FFmpeg's `h264_v4l2m2m` path
+- Pi 5 stateless hardware decode selection through FFmpeg's `*_v4l2request` decoders, paired with software H.264 encode
 
----
+They also provide Linux/Pi host capability probing that can be merged with FFmpeg/WebRTC probes through `RuntimeBuilder::with_feature_capability_probe()`.
 
-## The Manifest Specification (`pipelines.caml`)
+Libcamera capture, broader adapter recovery work, and host-backed Pi execution validation are still follow-up work.
 
-You define your entire multi-camera topology in a declarative, scannable configuration file:
+## Manifest Example
 
 ```yaml
 system:
-  hardware_target: "RASPBERRY_PI_5" # Valid options: [RASPBERRY_PI_4, RASPBERRY_PI_5, GENERIC_LINUX]
-  cma_allocation_limit: 512MB      # Memory safety limit for stateless allocation pools
+  hardware_target: "RASPBERRY_PI_5"
+  cma_allocation_limit: "512MB"
 
 pipelines:
-  - id: "forward_payload_optics"
+  - id: "forward_primary"
     input: "rtsp://192.168.1.50:554/stream1"
     type: "rtsp"
-    strategy: "passthrough"         # Zero-copy packet cloning straight into WebRTC tracks
+    strategy: "passthrough"
     network:
-      transport: "tcp"              # Enforces TCP delivery to eliminate UDP packet drops
-      packet_size_limit: 1200       # Matches MTU targets to avoid packet fragmentation
-      stall_timeout: 10s            # Watchdog reset loop limit for stalled network links
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
 
-  - id: "belly_optical_sensor"
+  - id: "belly_optical"
     input: "/dev/video0"
     type: "device"
     strategy: "transcode"
+    backend: "v4l2"
     processing:
       codec: "h264"
-      encoder: "software"           # Auto-selects libx264 utilizing ARMv8 NEON assembly vectors on Pi 5
+      encoder: "software"
       preset: "ultrafast"
       tune: "zerolatency"
       frame_rate: 30
       bitrate: 512k
-      rotation: 90                  # Applied inside user-space memory
-
+      rotation: 90
 ```
 
----
+## Quick Start
 
-## Compilation & Guardrail Matrix
+### Parse and compile a graph
 
-When `caml` evaluates your file, it analyzes the pipeline node choices against the structural architecture of your targeted chip:
+```rust
+use caml::{CamlCompiler, CamlManifest};
 
-| Target Hardware | Chosen Strategy | Compiler Action | Native Data Pathway |
-| --- | --- | --- | --- |
-| **Raspberry Pi 5** | `passthrough` | Approved | Bypasses codec blocks; clones raw frames to WebRTC |
-| **Raspberry Pi 5** | `transcode` (`hardware`) | **Rejected at Build** | Throws error: Pi 5 lacks hardware H.264/H.265 encoding blocks |
-| **Raspberry Pi 5** | `transcode` (`software`) | Approved | Generates multi-threaded, NEON-optimized software loops |
-| **Raspberry Pi 5** | `hardware_decode` | Approved | Hooks stateless V4L2 decoder via `DRM_PRIME` buffers |
-| **Raspberry Pi 4** | `transcode` (`hardware`) | Approved | Allocates and boots the legacy stateful `h264_v4l2m2m` engine |
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let raw_manifest = std::fs::read_to_string("config/pipelines.caml")?;
+    let manifest = CamlManifest::from_yaml_str(&raw_manifest)?;
+    let compiled = CamlCompiler::validate_and_compile(&manifest)?;
 
----
-
-## Quick Start Guide
-
-### 1. System Dependencies
-
-Because `caml` uses direct FFI integration, you must ensure your build target has the necessary FFmpeg development libraries installed:
-
-```bash
-# Ubuntu/Debian/Raspberry Pi OS
-sudo apt-get install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev
-
+    println!("compiled {} pipeline(s)", compiled.pipelines.len());
+    Ok(())
+}
 ```
 
-### 2. Configuration Setup
-
-Add `caml` to your project's `Cargo.toml` dependency block:
-
-```toml
-[dependencies]
-caml = { git = "https://github.com/your-org/caml.git" }
-tokio = { version = "1.38", features = ["full"] }
-
-```
-
-### 3. Application Implementation Example
+### Start the runtime through the facade
 
 ```rust
 use std::sync::Arc;
-use caml::{CamlManifest, CamlCompiler, RuntimeEngine};
+
+use caml::{
+    runtime::mock::{MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan},
+    CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeBuilder,
+};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // 1. Read the declarative configuration file
-    let raw_manifest = std::fs::read_to_string("config/pipelines.caml")?;
-    let manifest: CamlManifest = serde_yaml::from_str(&raw_manifest)?;
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest = CamlManifest::from_yaml_str(r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "camera_a"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "passthrough"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 200ms
+"#)?;
 
-    // 2. Pass layout rules through the hardware validation compiler
-    CamlCompiler::validate_and_compile(&manifest)?;
+    let compiled = CamlCompiler::compile(&manifest)?;
+    let source_factory = Arc::new(MockSourceFactory::new(std::collections::HashMap::from([(
+        "camera_a".to_string(),
+        MockSourcePlan::new(vec![MockSourceAction::EndOfStream]),
+    )])));
+    let sink_factory = Arc::new(MockSinkFactory::new(std::collections::HashMap::from([(
+        "camera_a".to_string(),
+        MockSinkRecorder::default(),
+    )])));
 
-    // 3. Allocate a native WebRTC output target
-    let rtp_track = Arc::new(webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP::new(
-        webrtc::rtp_transceiver::rtp_codec::RTPCodecCapability::default(),
-        "video".to_string(),
-        "caml-stream".to_string(),
-    ));
+    let runtime = RuntimeBuilder::new()
+        .with_compiled_graph(compiled)
+        .with_runtime_factory(RuntimeAdapters::new(source_factory, sink_factory))
+        .start()
+        .await?;
 
-    // 4. Build and boot the native async runtime engine
-    let target_node = &manifest.pipelines[0];
-    let net_profile = target_node.network.as_ref().unwrap();
-    
-    let engine = RuntimeEngine::new(
-        target_node.id.clone(),
-        target_node.input.clone(),
-        5004,                            // Target binding port
-        net_profile.packet_size_limit,    // Core block buffer allocation ceiling
-        net_profile.stall_timeout,       // Active watchdog threshold
-    );
-
-    println!("[caml] Spawning async media graph...");
-    engine.start_pipeline(rtp_track).await;
-
-    // Block current execution context to maintain the streaming runtime
-    tokio::signal::ctrl_c().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
-
 ```
 
----
+## Runtime Model
 
-## Built-In Watchdog Mechanics
+The runtime is now a staged graph rather than a single byte pump:
 
-The runtime natively embeds your production-tested streaming resilience logic. If a network camera stops transmitting frames or drops packets, the asynchronous `tokio::time::timeout` monitor catches the gap based on your `stall_timeout` setting.
+- `MediaSource` produces `MediaPayload`
+- zero or more `MediaTransform`s reshape the payload
+- `MediaSink` consumes the final payload
 
-Instead of executing a chaotic, resource-heavy process kill (`kill -9`) and clean-spawning a child runtime, `caml` safely flushes the internal buffer, puts the specific pipeline loop into a `TaskStatus::WatchdogStall` state, and executes a lightweight, warm user-space reconnection sequence without disturbing adjacent camera tasks.
+Payloads can represent encoded packets or decoded frames, which gives the core runtime a path to support both passthrough and transcode pipelines without changing the public supervision model again.
+
+## Recovery Model
+
+Each compiled pipeline carries a recovery policy. On watchdog timeout the supervisor transitions through:
+
+`Spawning -> Running -> Stalled -> Recovering -> Running/Failed`
+
+The current tests cover:
+
+- valid and invalid manifest parsing
+- graph compilation guardrails
+- capability probe merging and Pi host/target mismatch rejection
+- buffer reuse in the hot path
+- transient stall detection and supervised recovery
+- transient recoverable source errors that rebuild and restart a pipeline
+
+## Roadmap
+
+The next implementation milestone is:
+
+1. Add libcamera-backed device capture
+2. Expand adapter-specific recovery tuning and validation beyond the RTSP/FFmpeg path
+3. Add host-backed integration coverage for Pi 4 hardware encode and Pi 5 hardware decode execution
+
+That path now has a concrete workspace structure and runtime contract to land into, instead of another round of aspirational prose.

@@ -20,14 +20,22 @@ pub enum CompileError {
     InvalidConfiguration(String),
     #[error("duplicate pipeline id: {0}")]
     DuplicatePipelineId(String),
+    #[error("unsupported capability: {0}")]
+    UnsupportedCapability(String),
+    #[error("capability probe failed: {0}")]
+    ProbeFailure(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
     #[error("adapter error: {0}")]
     Adapter(String),
+    #[error("recoverable runtime error: {0}")]
+    Recoverable(String),
     #[error("source error: {0}")]
     Source(String),
+    #[error("transform error: {0}")]
+    Transform(String),
     #[error("sink error: {0}")]
     Sink(String),
     #[error("pipeline error: {0}")]
@@ -41,8 +49,16 @@ impl RuntimeError {
         Self::Adapter(message.into())
     }
 
+    pub fn recoverable(message: impl Into<String>) -> Self {
+        Self::Recoverable(message.into())
+    }
+
     pub fn source(message: impl Into<String>) -> Self {
         Self::Source(message.into())
+    }
+
+    pub fn transform(message: impl Into<String>) -> Self {
+        Self::Transform(message.into())
     }
 
     pub fn sink(message: impl Into<String>) -> Self {
@@ -51,5 +67,9 @@ impl RuntimeError {
 
     pub fn pipeline(message: impl Into<String>) -> Self {
         Self::Pipeline(message.into())
+    }
+
+    pub fn is_recoverable(&self) -> bool {
+        matches!(self, Self::Recoverable(_))
     }
 }
