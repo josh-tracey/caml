@@ -9,3 +9,6 @@ caml-core = { path = "../caml-core", version = "1.0.0" }
 
 [dev-dependencies]
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libcamera = "0.7.0"

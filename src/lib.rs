@@ -1,3 +1,4 @@
+pub mod adapters;
 mod builder;
 
 pub use builder::{RuntimeBuilder, RuntimeBuilderError};

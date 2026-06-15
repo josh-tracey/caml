@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+        
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libavdevice-dev libavfilter-dev pkg-config
+        
+    - name: Check formatting
+      run: cargo fmt --check
+      
+    - name: Clippy (All Targets)
+      run: cargo clippy --workspace --all-targets -- -D warnings
+      
+    - name: Run Workspace Tests
+      run: cargo test --workspace
+      
+    - name: Check Full Features
+      run: cargo check --features full
+      
+    - name: Test FFmpeg Features
+      run: cargo test --features ffmpeg
+      
+    - name: Test WebRTC Features
+      run: cargo test --features webrtc
+      
+    - name: Test Pi Features
+      run: cargo test --features pi

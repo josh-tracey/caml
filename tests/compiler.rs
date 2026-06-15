@@ -60,7 +60,8 @@ pipelines:
     )
     .expect("manifest should parse");
 
-    let error = CamlCompiler::compile(&manifest).expect_err("compiler should reject encoder");
+    let error =
+        CamlCompiler::compile_unchecked(&manifest).expect_err("compiler should reject encoder");
     assert!(matches!(error, CompileError::HardwareMismatch(_)));
     assert!(error.to_string().contains("Raspberry Pi 5"));
 }
@@ -148,6 +149,8 @@ pipelines:
     input: "rtsp://127.0.0.1:8554/live"
     type: "rtsp"
     strategy: "passthrough"
+    outputs:
+      - type: "webrtc_rtp"
     network:
       transport: "tcp"
       packet_size_limit: 1200
@@ -262,7 +265,7 @@ pipelines:
     )
     .expect("manifest should parse");
 
-    let compiled = CamlCompiler::compile(&manifest).expect("compiler should succeed");
+    let compiled = CamlCompiler::compile_unchecked(&manifest).expect("compiler should succeed");
     assert_eq!(
         compiled.pipelines[0].codec_path,
         caml::CodecPath::HardwareDecode
@@ -312,7 +315,7 @@ pipelines:
     )
     .expect("manifest should parse");
 
-    let compiled = CamlCompiler::compile(&manifest).expect("compiler should succeed");
+    let compiled = CamlCompiler::compile_unchecked(&manifest).expect("compiler should succeed");
     assert_eq!(
         compiled.pipelines[0].recovery.class,
         caml::RecoveryClass::Network

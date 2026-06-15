@@ -3,8 +3,8 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use crate::{
     error::CompileError,
     frontend::{
-        CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, PipelineNode,
-        ProcessingProfile, StreamStrategy, Transport,
+        CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile,
+        PipelineNode, ProcessingProfile, StreamStrategy, Transport,
     },
 };
 
@@ -195,6 +195,7 @@ pub struct CompiledPipeline {
     pub codec_path: CodecPath,
     pub recovery: RecoveryPolicy,
     pub capability_requirements: Vec<CapabilityRequirement>,
+    pub outputs: Vec<OutputProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,10 +246,21 @@ pub struct CamlCompiler;
 
 impl CamlCompiler {
     pub fn validate_and_compile(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
-        Self::compile(manifest)
+        Self::compile_unchecked(manifest)
     }
 
     pub fn compile(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
+        if manifest.system.hardware_target != HardwareTarget::GenericLinux {
+            return Err(CompileError::InvalidConfiguration(
+                "hardware-target compilation requires a capability probe. \
+                 Use `compile_with_probe` or `compile_unchecked` if you want to skip guardrails."
+                    .to_string(),
+            ));
+        }
+        Self::compile_internal(manifest, None)
+    }
+
+    pub fn compile_unchecked(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
         Self::compile_internal(manifest, None)
     }
 
@@ -433,6 +445,7 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         codec_path: resolve_codec_path(pipeline),
         recovery: recovery_policy_for(pipeline),
         capability_requirements: capability_requirements_for(pipeline),
+        outputs: pipeline.outputs.clone(),
     }
 }
 
@@ -532,8 +545,10 @@ fn capability_requirements_for(pipeline: &PipelineNode) -> Vec<CapabilityRequire
         },
     }
 
-    if matches!(pipeline.strategy, StreamStrategy::Passthrough) {
-        requirements.push(CapabilityRequirement::RtpPacketization);
+    for output in &pipeline.outputs {
+        if matches!(output, OutputProfile::WebrtcRtp { .. }) {
+            requirements.push(CapabilityRequirement::RtpPacketization);
+        }
     }
 
     if matches!(resolve_codec_path(pipeline), CodecPath::HardwareTranscode) {

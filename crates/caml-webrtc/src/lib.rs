@@ -38,11 +38,14 @@ struct TrackPacketWriter {
 #[async_trait]
 impl RtpPacketWriter for TrackPacketWriter {
     async fn write_packet(&self, packet: &Packet) -> Result<(), RuntimeError> {
-        self.track
-            .write_rtp_with_extensions(packet, &[])
-            .await
-            .map(|_| ())
-            .map_err(|error| RuntimeError::sink(format!("failed to write RTP packet: {}", error)))
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            self.track.write_rtp_with_extensions(packet, &[]),
+        )
+        .await
+        .map_err(|_| RuntimeError::sink("WebRTC track write stalled due to backpressure timeout"))?
+        .map(|_| ())
+        .map_err(|error| RuntimeError::sink(format!("failed to write RTP packet: {}", error)))
     }
 }
 

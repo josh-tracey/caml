@@ -53,7 +53,7 @@ async fn runtime_starts_and_shuts_down_cleanly() {
         Arc::new(MockSinkFactory::new(recorders)),
     );
 
-    let handle = RuntimeEngine::start(compiled, adapters)
+    let handle = RuntimeEngine::start(compiled, adapters, None)
         .await
         .expect("runtime should start");
 
@@ -98,7 +98,7 @@ async fn runtime_watchdog_recovers_after_a_transient_stall() {
         Arc::new(MockSinkFactory::new(recorders)),
     );
 
-    let handle = RuntimeEngine::start(compiled, adapters)
+    let handle = RuntimeEngine::start(compiled, adapters, None)
         .await
         .expect("runtime should start");
     let mut events = handle.subscribe();
@@ -158,7 +158,7 @@ async fn runtime_reuses_the_same_working_buffer() {
         Arc::new(MockSinkFactory::new(recorders)),
     );
 
-    let handle = RuntimeEngine::start(compiled, adapters)
+    let handle = RuntimeEngine::start(compiled, adapters, None)
         .await
         .expect("runtime should start");
 
@@ -294,7 +294,7 @@ async fn runtime_recovers_after_a_transient_source_error() {
         Arc::new(MockSinkFactory::new(recorders)),
     );
 
-    let handle = RuntimeEngine::start(compiled, adapters)
+    let handle = RuntimeEngine::start(compiled, adapters, None)
         .await
         .expect("runtime should start");
     let mut events = handle.subscribe();
