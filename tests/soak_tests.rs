@@ -4,7 +4,9 @@ use caml_core::{
     compiler::CamlCompiler,
     frontend::CamlManifest,
     runtime::{
-        mock::{MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan},
+        mock::{
+            MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
+        },
         RuntimeAdapters, RuntimeEngine, TaskStatus,
     },
 };
@@ -65,10 +67,10 @@ pipelines:
     let handle = RuntimeEngine::start(compiled, adapters, None)
         .await
         .expect("runtime should start");
-        
+
     let mut events = handle.subscribe();
     let mut recoveries = 0;
-    
+
     while let Ok(event) = events.recv().await {
         if event.status == TaskStatus::Recovering {
             recoveries += 1;
@@ -76,7 +78,10 @@ pipelines:
             break;
         }
     }
-    
+
     // It should have recovered exactly twice before reading EOS
-    assert_eq!(recoveries, 2, "should have recovered exactly twice from chaos");
+    assert_eq!(
+        recoveries, 2,
+        "should have recovered exactly twice from chaos"
+    );
 }

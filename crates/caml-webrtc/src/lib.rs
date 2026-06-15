@@ -40,7 +40,7 @@ impl RtpPacketWriter for TrackPacketWriter {
     async fn write_packet(&self, packet: &Packet) -> Result<(), RuntimeError> {
         tokio::time::timeout(
             Duration::from_millis(500),
-            self.track.write_rtp_with_extensions(packet, &[])
+            self.track.write_rtp_with_extensions(packet, &[]),
         )
         .await
         .map_err(|_| RuntimeError::sink("WebRTC track write stalled due to backpressure timeout"))?

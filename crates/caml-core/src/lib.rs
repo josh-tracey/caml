@@ -13,8 +13,8 @@ pub use compiler::{
 };
 pub use error::{CompileError, ManifestError, RuntimeError};
 pub use frontend::{
-    CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile, PipelineNode,
-    ProcessingProfile, StreamStrategy, SystemConfig, Transport,
+    CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile,
+    PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig, Transport,
 };
 pub use runtime::{
     EncodedPacket, MediaBuffer, MediaPayload, MediaSink, MediaSource, MediaTransform,

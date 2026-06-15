@@ -3,8 +3,8 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use crate::{
     error::CompileError,
     frontend::{
-        CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile, PipelineNode,
-        ProcessingProfile, StreamStrategy, Transport,
+        CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile,
+        PipelineNode, ProcessingProfile, StreamStrategy, Transport,
     },
 };
 

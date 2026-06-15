@@ -31,7 +31,9 @@ impl PipelineFactory for BuiltinAdapters {
                     if let Some(factory) = &self.ffmpeg_source {
                         caml_core::SourceFactory::build_source(factory.as_ref(), pipeline).await?
                     } else {
-                        return Err(RuntimeError::adapter("ffmpeg source factory not configured"));
+                        return Err(RuntimeError::adapter(
+                            "ffmpeg source factory not configured",
+                        ));
                     }
                 }
                 #[cfg(not(feature = "ffmpeg"))]
@@ -57,7 +59,10 @@ impl PipelineFactory for BuiltinAdapters {
             }
         };
 
-        let has_webrtc_output = pipeline.outputs.iter().any(|o| matches!(o, caml_core::OutputProfile::WebrtcRtp { .. }));
+        let has_webrtc_output = pipeline
+            .outputs
+            .iter()
+            .any(|o| matches!(o, caml_core::OutputProfile::WebrtcRtp { .. }));
 
         let sink: Box<dyn MediaSink> = if has_webrtc_output {
             #[cfg(feature = "webrtc")]

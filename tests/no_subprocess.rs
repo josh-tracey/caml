@@ -43,7 +43,7 @@ fn test_no_subprocesses_in_crates() {
     // when running `cargo test` on the top-level package or `--workspace`.
     // CARGO_MANIFEST_DIR points to the directory of the crate being tested (caml).
     let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates");
-    
+
     if crates_dir.exists() {
         check_dir(&crates_dir);
     } else {

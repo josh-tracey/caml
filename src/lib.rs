@@ -1,5 +1,5 @@
-mod builder;
 pub mod adapters;
+mod builder;
 
 pub use builder::{RuntimeBuilder, RuntimeBuilderError};
 pub use caml_core::*;

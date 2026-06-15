@@ -804,7 +804,6 @@ fn open_rtsp_input(
     options.set("timeout", "5000000"); // 5 seconds for UDP
     options.set("stimeout", "5000000"); // 5 seconds for TCP/RTSP
 
-
     ffmpeg::format::input_with_dictionary(&input, options)
         .map_err(|error| format!("unable to open RTSP input '{}': {}", input, error))
 }

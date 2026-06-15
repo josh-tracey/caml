@@ -60,7 +60,8 @@ pipelines:
     )
     .expect("manifest should parse");
 
-    let error = CamlCompiler::compile_unchecked(&manifest).expect_err("compiler should reject encoder");
+    let error =
+        CamlCompiler::compile_unchecked(&manifest).expect_err("compiler should reject encoder");
     assert!(matches!(error, CompileError::HardwareMismatch(_)));
     assert!(error.to_string().contains("Raspberry Pi 5"));
 }
