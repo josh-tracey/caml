@@ -64,41 +64,68 @@ impl PipelineFactory for BuiltinAdapters {
         };
         let source = source_res?;
 
-        let has_webrtc_output = pipeline
-            .outputs
-            .iter()
-            .any(|o| matches!(o, caml_core::OutputProfile::WebrtcRtp { .. }));
+        // Collect all configured sinks for this pipeline.
+        let mut sink_configs: Vec<caml_core::SinkActorConfig> = Vec::new();
 
-        let has_recording_output = pipeline
-            .outputs
-            .iter()
-            .any(|o| matches!(o, caml_core::OutputProfile::Recording));
-
-        let sink_res: Result<Box<dyn MediaSink>, RuntimeError> = if has_recording_output {
-            let packets = self.recording_packets.clone().unwrap_or_else(|| {
-                Arc::new(tokio::sync::Mutex::new(Vec::new()))
-            });
-            Ok(Box::new(caml_core::runtime::RecordingSink { packets }))
-        } else if has_webrtc_output {
-            #[cfg(feature = "webrtc")]
-            {
-                if let Some(factory) = self.webrtc_sinks.get(&pipeline.id) {
-                    caml_core::SinkFactory::build_sink(factory.as_ref(), pipeline).await
-                } else {
-                    Err(RuntimeError::adapter(format!(
-                        "no webrtc sink configured for pipeline {}",
-                        pipeline.id
-                    )))
+        for output in &pipeline.outputs {
+            match output {
+                caml_core::OutputProfile::Recording {
+                    queue_limit,
+                    drop_policy,
+                } => {
+                    let packets = self.recording_packets.clone().unwrap_or_else(|| {
+                        Arc::new(tokio::sync::Mutex::new(Vec::new()))
+                    });
+                    let queue_limit = queue_limit.unwrap_or(100);
+                    sink_configs.push(caml_core::SinkActorConfig {
+                        sink: Box::new(caml_core::runtime::RecordingSink { packets }),
+                        queue_limit,
+                        drop_policy: frontend_to_runtime_drop_policy(*drop_policy),
+                    });
+                }
+                #[allow(unused_variables)]
+                caml_core::OutputProfile::WebrtcRtp {
+                    queue_limit,
+                    drop_policy,
+                    ..
+                } => {
+                    #[cfg(feature = "webrtc")]
+                    {
+                        if let Some(factory) = self.webrtc_sinks.get(&pipeline.id) {
+                            let webrtc_sink = caml_core::SinkFactory::build_sink(
+                                factory.as_ref(),
+                                pipeline,
+                            )
+                            .await?;
+                            let queue_limit = queue_limit.unwrap_or(10);
+                            sink_configs.push(caml_core::SinkActorConfig {
+                                sink: webrtc_sink,
+                                queue_limit,
+                                drop_policy: frontend_to_runtime_drop_policy(*drop_policy),
+                            });
+                        } else {
+                            return Err(RuntimeError::adapter(format!(
+                                "no webrtc sink configured for pipeline {}",
+                                pipeline.id
+                            )));
+                        }
+                    }
+                    #[cfg(not(feature = "webrtc"))]
+                    {
+                        return Err(RuntimeError::adapter("webrtc feature is disabled"));
+                    }
                 }
             }
-            #[cfg(not(feature = "webrtc"))]
-            {
-                Err(RuntimeError::adapter("webrtc feature is disabled"))
-            }
-        } else {
-            Ok(Box::new(NullSink))
+        }
+
+        // Wrap in a FanoutRouter if multiple sinks are configured, use the
+        // single sink directly when there is only one to avoid unnecessary overhead,
+        // and fall back to NullSink when no outputs are declared.
+        let sink: Box<dyn MediaSink> = match sink_configs.len() {
+            0 => Box::new(NullSink),
+            1 => sink_configs.remove(0).sink,
+            _ => Box::new(caml_core::FanoutRouter::new(sink_configs)),
         };
-        let sink = sink_res?;
 
         Ok(PipelineStages {
             source,
@@ -107,6 +134,19 @@ impl PipelineFactory for BuiltinAdapters {
         })
     }
 }
+
+/// Convert the frontend `DropPolicy` (from the manifest schema) to the
+/// runtime `DropPolicy` used by `FanoutRouter`.
+fn frontend_to_runtime_drop_policy(
+    policy: caml_core::frontend::DropPolicy,
+) -> caml_core::DropPolicy {
+    match policy {
+        caml_core::frontend::DropPolicy::Block => caml_core::DropPolicy::Block,
+        caml_core::frontend::DropPolicy::DropOldest => caml_core::DropPolicy::DropOldest,
+        caml_core::frontend::DropPolicy::DropNewest => caml_core::DropPolicy::DropNewest,
+    }
+}
+
 
 impl From<BuiltinAdapters> for caml_core::RuntimeFactory {
     fn from(adapters: BuiltinAdapters) -> Self {

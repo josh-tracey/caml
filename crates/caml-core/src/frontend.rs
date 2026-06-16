@@ -58,6 +58,19 @@ pub struct NetworkProfile {
     pub stall_timeout: std::time::Duration,
 }
 
+/// Drop policy applied when a sink's queue is full.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DropPolicy {
+    /// Back-pressure the ingestion loop until the sink drains.
+    #[default]
+    Block,
+    /// Discard the oldest buffered frame to make room for the incoming one.
+    DropOldest,
+    /// Discard the incoming frame; the sink keeps its current queue contents.
+    DropNewest,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutputProfile {
@@ -67,8 +80,23 @@ pub enum OutputProfile {
         mtu: Option<usize>,
         ssrc: Option<String>,
         clock_rate: Option<u32>,
+        /// Maximum number of frames buffered in the sink's actor queue.
+        /// Defaults to 10 when unset.
+        #[serde(default)]
+        queue_limit: Option<usize>,
+        /// Action taken when `queue_limit` is reached.
+        #[serde(default)]
+        drop_policy: DropPolicy,
     },
-    Recording,
+    Recording {
+        /// Maximum number of frames buffered in the recorder's actor queue.
+        /// Defaults to 100 when unset.
+        #[serde(default)]
+        queue_limit: Option<usize>,
+        /// Action taken when `queue_limit` is reached.
+        #[serde(default)]
+        drop_policy: DropPolicy,
+    },
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]

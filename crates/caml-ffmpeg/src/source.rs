@@ -110,7 +110,7 @@ impl MediaSource for FfmpegSource {
                     timestamp: packet.timestamp,
                     duration: packet.duration,
                     is_keyframe: packet.is_keyframe,
-                    data: caml_core::MediaStorage::Pooled(data),
+                    data: caml_core::MediaStorage::Pooled(data.freeze()),
                 }))
             }
             Some(WorkerMessage::EndOfStream) | None => Ok(MediaPayload::EndOfStream),

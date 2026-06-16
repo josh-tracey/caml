@@ -278,7 +278,7 @@ impl LibcameraFrameProvider for NativeLibcameraProvider {
             width: self.width,
             height: self.height,
             timestamp: Some(msg.timestamp),
-            data: MediaStorage::Pooled(msg.data),
+            data: MediaStorage::Pooled(msg.data.freeze()),
         }))
     }
 }

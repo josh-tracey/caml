@@ -84,6 +84,9 @@ impl SinkFactory for WebRtcSinkFactory {
                 mtu,
                 ssrc,
                 clock_rate,
+                // queue_limit and drop_policy are consumed by the FanoutRouter layer,
+                // not needed inside the WebRTC sink itself.
+                ..
             }) => (
                 codec.clone(),
                 *payload_type,
@@ -447,6 +450,8 @@ mod tests {
                 mtu: Some(1400),
                 ssrc: Some("9999".to_string()),
                 clock_rate: Some(90000),
+                queue_limit: None,
+                drop_policy: caml_core::frontend::DropPolicy::Block,
             }],
         };
 
@@ -472,7 +477,7 @@ mod tests {
             timestamp: None,
             duration: Some(Duration::from_millis(40)),
             is_keyframe: true,
-            data: caml_core::MediaStorage::Pooled(data),
+            data: caml_core::MediaStorage::Pooled(data.freeze()),
         }), &mut context).await.expect("consume failed");
 
         let packets = writer.packets.lock().await;

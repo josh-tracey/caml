@@ -254,7 +254,7 @@ impl MediaSource for SequencedSource {
                         timestamp: None,
                         duration: None,
                         is_keyframe: false,
-                        data: caml::runtime::MediaStorage::Pooled(buffer),
+                        data: caml::runtime::MediaStorage::Pooled(buffer.freeze()),
                     }));
                 }
                 SequencedAction::RecoverableFail(message) => {

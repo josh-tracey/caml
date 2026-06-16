@@ -14,14 +14,17 @@ pub use compiler::{
 };
 pub use error::{CompileError, ManifestError, RuntimeError};
 pub use frontend::{
-    CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile,
-    PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig, Transport,
+    CamlManifest, DropPolicy as OutputDropPolicy, HardwareTarget, InputBackend, InputType,
+    NetworkProfile, OutputProfile, PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig,
+    Transport,
 };
+
 pub use runtime::{
-    EncodedPacket, MediaBuffer, MediaPayload, MediaSink, MediaSource, MediaStorage, MediaTransform,
-    NoopTransformFactory, PipelineContext, PipelineFactory, PipelineStages, PoolStats, RuntimeAdapters,
-    RuntimeEngine, RuntimeEvent, RuntimeFactory, RuntimeHandle, RuntimeStatus, SinkFactory,
-    SourceFactory, TaskStatus, TransformFactory, RecordingSink, RecordedPacket, BorrowedMediaSlice,
+    DropPolicy, EncodedPacket, FanoutRouter, MediaBuffer, MediaPayload, MediaSink, MediaSource,
+    MediaStorage, MediaTransform, NoopTransformFactory, PipelineContext, PipelineFactory,
+    PipelineStages, PoolStats, PooledBuffer, RecordedPacket, RecordingSink, RuntimeAdapters,
+    RuntimeEngine, RuntimeEvent, RuntimeFactory, RuntimeHandle, RuntimeStatus, SinkActorConfig,
+    SinkFactory, SourceFactory, TaskStatus, TransformFactory, BorrowedMediaSlice,
     MappedFrameHandle, FfmpegPacketHandle,
 };
 pub use units::{Bitrate, ByteSize};

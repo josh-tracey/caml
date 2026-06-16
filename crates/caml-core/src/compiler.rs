@@ -209,6 +209,42 @@ pub struct CompiledPipeline {
     pub outputs: Vec<OutputProfile>,
 }
 
+impl CompiledPipeline {
+    /// Return a minimal sentinel pipeline used only by actor task stubs that
+    /// never exercise the runtime policy or buffer pool.
+    pub fn sentinel() -> Self {
+        Self {
+            id: String::from("__sentinel__"),
+            input: CompiledInput {
+                kind: InputType::Rtsp,
+                source: String::new(),
+            },
+            strategy: StreamStrategy::Passthrough,
+            network: None,
+            processing: None,
+            runtime: RuntimePolicy {
+                buffer_size: 1,
+                watchdog_timeout: Duration::from_secs(0),
+                buffer_count: 0,
+            },
+            resolved_backend: ResolvedInputBackend::FfmpegRtsp,
+            execution_mode: ExecutionMode::EncodedPackets,
+            codec_path: CodecPath::Passthrough,
+            recovery: RecoveryPolicy {
+                class: RecoveryClass::Network,
+                max_restarts: 0,
+                initial_backoff: Duration::from_millis(0),
+                max_backoff: Duration::from_millis(0),
+                backoff_multiplier: 1.0,
+                reset_after: Duration::from_millis(0),
+            },
+            capability_requirements: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledInput {
     pub kind: InputType,

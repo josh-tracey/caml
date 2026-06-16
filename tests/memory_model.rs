@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 use caml::runtime::{BufferPool, EncodedPacket, MediaStorage};
+
 
 #[test]
 fn test_buffer_pool_preallocate_and_stats() {
@@ -60,12 +62,12 @@ fn test_media_storage_variants() {
     let mut buf = pool.acquire();
     buf.extend_from_slice(&[1, 2, 3]);
 
-    let storage_pooled = MediaStorage::Pooled(buf);
+    let storage_pooled = MediaStorage::Pooled(buf.freeze());
     assert_eq!(storage_pooled.as_slice(), &[1, 2, 3]);
     assert_eq!(storage_pooled.len(), 3);
     assert!(!storage_pooled.is_empty());
 
-    let storage_owned = MediaStorage::Owned(vec![4, 5, 6]);
+    let storage_owned = MediaStorage::Owned(Arc::new(vec![4, 5, 6]));
     assert_eq!(storage_owned.as_slice(), &[4, 5, 6]);
     assert_eq!(storage_owned.len(), 3);
 }
@@ -81,7 +83,7 @@ fn test_encoded_packet_with_media_storage() {
         timestamp: Some(Duration::from_millis(100)),
         duration: Some(Duration::from_millis(33)),
         is_keyframe: true,
-        data: MediaStorage::Pooled(buf),
+        data: MediaStorage::Pooled(buf.freeze()),
     };
 
     assert_eq!(packet.data.as_slice(), &[7, 8, 9]);
