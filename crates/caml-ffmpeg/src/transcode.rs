@@ -1,8 +1,12 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 use tokio::sync::mpsc;
 use ffmpeg_next as ffmpeg;
 
-use caml_core::CompiledProcessingProfile;
+use caml_core::{
+    CompiledOverlayLayer, CompiledOverlayProfile, CompiledPipeline, CompiledProcessingProfile,
+    CompiledTextOverlayStyle, CompiledTimestampOverlay, CompiledWatermarkOverlay,
+    OverlayPosition, OverlayTimezone,
+};
 
 use crate::hwaccel::TranscodeBackend;
 use crate::worker::{WorkerMessage, OwnedEncodedPacket, InputSpec};
@@ -15,27 +19,30 @@ use crate::h264::{H264Config, extract_h264_config, normalize_h264_payload};
 use tokio_util::sync::CancellationToken;
 
 pub fn transcode_packets(
-    input: &str,
-    input_spec: &InputSpec,
-    processing: &CompiledProcessingProfile,
-    backend: TranscodeBackend,
-    default_frame_duration: Duration,
-    tx: &mpsc::Sender<WorkerMessage>,
-    cancel: &CancellationToken,
+    job: TranscodeJob<'_>,
 ) -> Result<(), String> {
-    let mut context = open_media_input(input, input_spec)?;
+    let mut context = open_media_input(job.input, job.input_spec)?;
     let nominal_duration =
-        frame_duration_from_processing(processing).unwrap_or(default_frame_duration);
+        frame_duration_from_processing(job.processing).unwrap_or(job.default_frame_duration);
     let (stream_index, mut transcoder) = {
-        let stream = best_video_stream(&context, input)?;
+        let stream = best_video_stream(&context, job.input)?;
         (
             stream.index(),
-            VideoTranscoder::new(&stream, processing, backend, nominal_duration)?,
+            VideoTranscoder::new(
+                &stream,
+                job.processing,
+                job.overlay,
+                job.backend,
+                nominal_duration,
+            )?,
         )
     };
 
+    let start_instant = std::time::Instant::now();
+    let mut first_pts_duration = None;
+
     for (stream, packet) in context.packets() {
-        if cancel.is_cancelled() {
+        if job.cancel.is_cancelled() {
             break;
         }
 
@@ -43,18 +50,43 @@ pub fn transcode_packets(
             continue;
         }
 
+        if job.is_local_file {
+            if let Some(pts) = packet.pts() {
+                let pts_duration = duration_from_time_base(Some(pts), stream.time_base()).unwrap_or(Duration::ZERO);
+                let first_pts = *first_pts_duration.get_or_insert(pts_duration);
+                let relative_duration = pts_duration.checked_sub(first_pts).unwrap_or(Duration::ZERO);
+                let target_time = start_instant + relative_duration;
+                let now = std::time::Instant::now();
+                if target_time > now {
+                    std::thread::sleep(target_time - now);
+                }
+            }
+        }
+
         transcoder.send_packet_to_decoder(&packet)?;
-        transcoder.receive_decoded_frames(tx)?;
+        transcoder.receive_decoded_frames(job.tx)?;
     }
 
     transcoder.send_eof_to_decoder()?;
-    transcoder.receive_decoded_frames(tx)?;
+    transcoder.receive_decoded_frames(job.tx)?;
     transcoder.flush_filter()?;
-    transcoder.receive_filtered_frames(tx)?;
+    transcoder.receive_filtered_frames(job.tx)?;
     transcoder.send_eof_to_encoder()?;
-    transcoder.receive_encoded_packets(tx)?;
+    transcoder.receive_encoded_packets(job.tx)?;
 
     Ok(())
+}
+
+pub struct TranscodeJob<'a> {
+    pub input: &'a str,
+    pub input_spec: &'a InputSpec,
+    pub processing: &'a CompiledProcessingProfile,
+    pub overlay: Option<&'a CompiledOverlayProfile>,
+    pub backend: TranscodeBackend,
+    pub default_frame_duration: Duration,
+    pub tx: &'a mpsc::Sender<WorkerMessage>,
+    pub cancel: &'a CancellationToken,
+    pub is_local_file: bool,
 }
 
 pub struct VideoTranscoder {
@@ -70,6 +102,7 @@ impl VideoTranscoder {
     pub fn new(
         stream: &ffmpeg::format::stream::Stream<'_>,
         processing: &CompiledProcessingProfile,
+        overlay: Option<&CompiledOverlayProfile>,
         backend: TranscodeBackend,
         nominal_duration: Duration,
     ) -> Result<Self, String> {
@@ -78,7 +111,7 @@ impl VideoTranscoder {
         let rotation = normalize_rotation(processing.rotation)?;
         let (output_width, output_height) =
             rotated_dimensions(decoder.width(), decoder.height(), rotation);
-        let filter = build_video_filter(&decoder, stream.time_base(), rotation)?;
+        let filter = build_video_filter(&decoder, stream.time_base(), rotation, overlay)?;
         let encoder =
             open_h264_encoder(&decoder, processing, backend, output_width, output_height)?;
         let encoder_time_base = encoder.time_base();
@@ -196,8 +229,13 @@ pub fn open_video_decoder(
     stream: &ffmpeg::format::stream::Stream<'_>,
     backend: TranscodeBackend,
 ) -> Result<ffmpeg::decoder::Video, String> {
-    let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+    let mut context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|error| format!("failed to create decoder context: {}", error))?;
+
+    // Optimize decoding latency by disabling frame-parallel buffering (auto-threading buffers frames)
+    let mut decoder_threading = ffmpeg::threading::Config::kind(ffmpeg::threading::Type::Slice);
+    decoder_threading.count = 1;
+    context.set_threading(decoder_threading);
 
     match backend {
         TranscodeBackend::Software | TranscodeBackend::Pi4HardwareEncode => context
@@ -242,6 +280,7 @@ pub fn build_video_filter(
     decoder: &ffmpeg::decoder::Video,
     time_base: ffmpeg::Rational,
     rotation: Rotation,
+    overlay: Option<&CompiledOverlayProfile>,
 ) -> Result<ffmpeg::filter::Graph, String> {
     let mut filter = ffmpeg::filter::Graph::new();
     let aspect_ratio = sanitize_rational(decoder.aspect_ratio());
@@ -284,16 +323,247 @@ pub fn build_video_filter(
         out.set_pixel_format(ffmpeg::format::Pixel::YUV420P);
     }
 
+    let filter_spec = build_filter_spec(rotation, overlay)?;
+
     filter
         .output("in", 0)
         .and_then(|parser| parser.input("out", 0))
-        .and_then(|parser| parser.parse(rotation.filter_spec()))
+        .and_then(|parser| parser.parse(&filter_spec))
         .map_err(|error| format!("failed to parse filter graph: {}", error))?;
     filter
         .validate()
         .map_err(|error| format!("failed to validate filter graph: {}", error))?;
 
     Ok(filter)
+}
+
+pub const DEFAULT_DRAW_TEXT_FONT_PATH: &str =
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+
+pub fn validate_overlay_runtime(pipeline: &CompiledPipeline) -> Result<(), String> {
+    let Some(overlay) = pipeline.overlay.as_ref() else {
+        return Ok(());
+    };
+
+    if !crate::capabilities::init_ffmpeg() {
+        return Err(format!(
+            "pipeline '{}' requires FFmpeg overlay support, but FFmpeg failed to initialize",
+            pipeline.id
+        ));
+    }
+
+    let uses_text = overlay.layers.iter().any(|layer| {
+        matches!(
+            layer,
+            CompiledOverlayLayer::Timestamp(_) | CompiledOverlayLayer::Text(_)
+        )
+    });
+
+    if uses_text && !Path::new(DEFAULT_DRAW_TEXT_FONT_PATH).exists() {
+        return Err(format!(
+            "pipeline '{}' requires the default overlay font '{}', but it was not found; install a DejaVu Sans font package on the host",
+            pipeline.id, DEFAULT_DRAW_TEXT_FONT_PATH
+        ));
+    }
+
+    for layer in &overlay.layers {
+        if let CompiledOverlayLayer::Watermark(watermark) = layer {
+            validate_watermark_asset(&pipeline.id, watermark)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_watermark_asset(
+    pipeline_id: &str,
+    watermark: &CompiledWatermarkOverlay,
+) -> Result<(), String> {
+    let path = Path::new(&watermark.image_path);
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!(
+            "pipeline '{}' watermark '{}' is not accessible: {}",
+            pipeline_id, watermark.image_path, error
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "pipeline '{}' watermark '{}' must be a regular file",
+            pipeline_id, watermark.image_path
+        ));
+    }
+
+    let context = ffmpeg::format::input(&watermark.image_path).map_err(|error| {
+        format!(
+            "pipeline '{}' watermark '{}' could not be decoded by FFmpeg: {}",
+            pipeline_id, watermark.image_path, error
+        )
+    })?;
+    best_video_stream(&context, &watermark.image_path).map(|_| ())
+}
+
+fn build_filter_spec(
+    rotation: Rotation,
+    overlay: Option<&CompiledOverlayProfile>,
+) -> Result<String, String> {
+    let Some(overlay) = overlay else {
+        return Ok(format!("[in]{}[out]", rotation.filter_spec()));
+    };
+
+    let mut segments = Vec::new();
+    let mut current = "stage0".to_string();
+    segments.push(format!("[in]{}[{}]", rotation.filter_spec(), current));
+
+    for (index, layer) in overlay.layers.iter().enumerate() {
+        let next = format!("stage{}", index + 1);
+        match layer {
+            CompiledOverlayLayer::Timestamp(timestamp) => {
+                segments.push(format!(
+                    "[{}]{}[{}]",
+                    current,
+                    drawtext_filter_for_timestamp(timestamp)?,
+                    next
+                ));
+            }
+            CompiledOverlayLayer::Text(text) => {
+                segments.push(format!(
+                    "[{}]{}[{}]",
+                    current,
+                    drawtext_filter_for_text(&text.text, &text.style)?,
+                    next
+                ));
+            }
+            CompiledOverlayLayer::Watermark(watermark) => {
+                let wm_label = format!("wm{}", index);
+                segments.push(format!("{}[{}]", watermark_filter_chain(watermark)?, wm_label));
+                segments.push(format!(
+                    "[{}][{}]overlay={}[{}]",
+                    current,
+                    wm_label,
+                    overlay_position_expr(watermark.position, watermark.margin),
+                    next
+                ));
+            }
+        }
+        current = next;
+    }
+
+    segments.push(format!("[{}]null[out]", current));
+    Ok(segments.join(";"))
+}
+
+fn drawtext_filter_for_timestamp(timestamp: &CompiledTimestampOverlay) -> Result<String, String> {
+    let style = &timestamp.style;
+    let time_fn = match timestamp.timezone {
+        OverlayTimezone::Utc => "gmtime",
+        OverlayTimezone::Local => "localtime",
+    };
+    let format = escape_drawtext_expansion_format(&timestamp.format);
+    let text = format!("%{{{}\\:{}}}", time_fn, format);
+    drawtext_filter(&text, style)
+}
+
+fn drawtext_filter_for_text(
+    text: &str,
+    style: &CompiledTextOverlayStyle,
+) -> Result<String, String> {
+    let text = escape_drawtext_text(text);
+    drawtext_filter(&text, style)
+}
+
+fn drawtext_filter(
+    text: &str,
+    style: &CompiledTextOverlayStyle,
+) -> Result<String, String> {
+    let font_path = escape_filter_path(DEFAULT_DRAW_TEXT_FONT_PATH);
+    let font_color = escape_filter_value(&style.font_color);
+    let box_color = format!(
+        "{}@{}",
+        escape_filter_value(&style.background_color),
+        alpha_percent_to_decimal(style.background_alpha)
+    );
+    let (x, y) = drawtext_position_expr(style.position, style.margin);
+
+    Ok(format!(
+        "drawtext=fontfile='{}':text='{}':x={}:y={}:fontsize={}:fontcolor={}:box=1:boxcolor={}:boxborderw={}",
+        font_path, text, x, y, style.font_size, font_color, box_color, style.padding
+    ))
+}
+
+fn watermark_filter_chain(watermark: &CompiledWatermarkOverlay) -> Result<String, String> {
+    let path = escape_filter_path(&watermark.image_path);
+    let mut chain = format!("movie='{}'", path);
+
+    if let Some(max_width_px) = watermark.max_width_px {
+        chain.push_str(&format!(
+            ",scale=w={}:h=-1:force_original_aspect_ratio=decrease",
+            max_width_px
+        ));
+    }
+
+    if watermark.opacity < 100 {
+        chain.push_str(",format=rgba");
+        chain.push_str(&format!(
+            ",colorchannelmixer=aa={}",
+            alpha_percent_to_decimal(watermark.opacity)
+        ));
+    }
+
+    Ok(chain)
+}
+
+fn drawtext_position_expr(position: OverlayPosition, margin: u32) -> (String, String) {
+    match position {
+        OverlayPosition::TopLeft => (format!("{margin}"), format!("{margin}")),
+        OverlayPosition::TopRight => (
+            format!("w-text_w-{margin}"),
+            format!("{margin}"),
+        ),
+        OverlayPosition::BottomLeft => (
+            format!("{margin}"),
+            format!("h-text_h-{margin}"),
+        ),
+        OverlayPosition::BottomRight => (
+            format!("w-text_w-{margin}"),
+            format!("h-text_h-{margin}"),
+        ),
+    }
+}
+
+fn overlay_position_expr(position: OverlayPosition, margin: u32) -> String {
+    match position {
+        OverlayPosition::TopLeft => format!("x={}:y={}", margin, margin),
+        OverlayPosition::TopRight => format!("x=W-w-{}:y={}", margin, margin),
+        OverlayPosition::BottomLeft => format!("x={}:y=H-h-{}", margin, margin),
+        OverlayPosition::BottomRight => format!("x=W-w-{}:y=H-h-{}", margin, margin),
+    }
+}
+
+fn escape_filter_path(value: &str) -> String {
+    escape_filter_value(value)
+}
+
+fn escape_filter_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
+}
+
+fn escape_drawtext_text(value: &str) -> String {
+    escape_filter_value(value).replace('%', "\\%")
+}
+
+fn escape_drawtext_expansion_format(value: &str) -> String {
+    value
+        .replace('\\', "\\\\\\\\")
+        .replace(':', "\\\\\\:")
+        .replace('\'', "\\'")
+}
+
+fn alpha_percent_to_decimal(value: u8) -> String {
+    let alpha = f32::from(value) / 100.0;
+    format!("{alpha:.2}")
 }
 
 pub fn open_h264_encoder(
@@ -333,6 +603,11 @@ pub fn open_h264_encoder(
     encoder.set_bit_rate(processing.bitrate_bps as usize);
     encoder.set_max_b_frames(0);
     encoder.set_gop(processing.frame_rate.saturating_mul(2));
+
+    // Optimize encoding latency by disabling frame-parallel buffering
+    let mut encoder_threading = ffmpeg::threading::Config::kind(ffmpeg::threading::Type::Slice);
+    encoder_threading.count = 1;
+    encoder.set_threading(encoder_threading);
 
     let mut options = ffmpeg::Dictionary::new();
     if !processing.preset.trim().is_empty() {
@@ -399,5 +674,148 @@ pub fn sanitize_rational(value: ffmpeg::Rational) -> ffmpeg::Rational {
         ffmpeg::Rational(1, 1)
     } else {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        alpha_percent_to_decimal, build_filter_spec, drawtext_filter_for_timestamp,
+        validate_overlay_runtime, Rotation,
+    };
+    use caml_core::{
+        CodecPath, CompiledInput, CompiledOverlayLayer, CompiledOverlayProfile, CompiledPipeline,
+        CompiledTextOverlay, CompiledTextOverlayStyle, CompiledTimestampOverlay,
+        CompiledWatermarkOverlay, ExecutionMode, InputType, OverlayPosition, OverlayTimezone,
+        RecoveryClass, RecoveryPolicy, ResolvedInputBackend, RuntimePolicy, StreamStrategy,
+    };
+    use std::time::Duration;
+
+    fn overlay_pipeline(overlay: CompiledOverlayProfile) -> CompiledPipeline {
+        CompiledPipeline {
+            id: "BOTTOM_CAM01".to_string(),
+            input: CompiledInput {
+                kind: InputType::Device,
+                source: "/dev/video0".to_string(),
+            },
+            strategy: StreamStrategy::Transcode,
+            network: None,
+            processing: None,
+            overlay: Some(overlay),
+            runtime: RuntimePolicy {
+                buffer_size: 1200,
+                watchdog_timeout: Duration::from_secs(5),
+                buffer_count: 64,
+            },
+            resolved_backend: ResolvedInputBackend::AutoDevice,
+            execution_mode: ExecutionMode::DecodedFrames,
+            codec_path: CodecPath::SoftwareTranscode,
+            recovery: RecoveryPolicy {
+                class: RecoveryClass::Device,
+                max_restarts: 3,
+                initial_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                backoff_multiplier: 2.0,
+                reset_after: Duration::from_secs(60),
+            },
+            capability_requirements: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn builds_filter_spec_in_overlay_order() {
+        let overlay = CompiledOverlayProfile {
+            layers: vec![
+                CompiledOverlayLayer::Timestamp(CompiledTimestampOverlay {
+                    format: "%Y-%m-%d %H:%M:%S UTC".to_string(),
+                    timezone: OverlayTimezone::Utc,
+                    style: CompiledTextOverlayStyle {
+                        position: OverlayPosition::TopLeft,
+                        font_size: 18,
+                        font_color: "white".to_string(),
+                        background_color: "black".to_string(),
+                        background_alpha: 60,
+                        padding: 6,
+                        margin: 12,
+                    },
+                }),
+                CompiledOverlayLayer::Text(CompiledTextOverlay {
+                    text: "DEV01".to_string(),
+                    style: CompiledTextOverlayStyle {
+                        position: OverlayPosition::BottomRight,
+                        font_size: 18,
+                        font_color: "yellow".to_string(),
+                        background_color: "black".to_string(),
+                        background_alpha: 50,
+                        padding: 4,
+                        margin: 10,
+                    },
+                }),
+                CompiledOverlayLayer::Watermark(CompiledWatermarkOverlay {
+                    image_path: "./logo.png".to_string(),
+                    position: OverlayPosition::BottomRight,
+                    max_width_px: Some(96),
+                    opacity: 75,
+                    margin: 8,
+                }),
+            ],
+        };
+
+        let spec = build_filter_spec(Rotation::Clockwise, Some(&overlay)).expect("spec");
+        assert!(spec.contains("[in]transpose=clock[stage0]"));
+        assert!(spec.contains("drawtext"));
+        assert!(spec.contains("movie='./logo.png'"));
+
+        let first_draw = spec.find("drawtext").expect("first drawtext");
+        let second_draw = spec[first_draw + 1..]
+            .find("drawtext")
+            .map(|offset| offset + first_draw + 1)
+            .expect("second drawtext");
+        let movie = spec.find("movie='./logo.png'").expect("movie");
+        assert!(first_draw < second_draw);
+        assert!(second_draw < movie);
+    }
+
+    #[test]
+    fn rejects_missing_watermark_asset_before_worker_start() {
+        let overlay = CompiledOverlayProfile {
+            layers: vec![CompiledOverlayLayer::Watermark(CompiledWatermarkOverlay {
+                image_path: "./does-not-exist.png".to_string(),
+                position: OverlayPosition::TopLeft,
+                max_width_px: None,
+                opacity: 100,
+                margin: 12,
+            })],
+        };
+
+        let error = validate_overlay_runtime(&overlay_pipeline(overlay))
+            .expect_err("missing watermark should fail");
+        assert!(error.contains("does-not-exist.png"));
+    }
+
+    #[test]
+    fn converts_alpha_percent_to_decimal() {
+        assert_eq!(alpha_percent_to_decimal(75), "0.75");
+    }
+
+    #[test]
+    fn timestamp_overlay_escapes_inner_time_format_colons() {
+        let filter = drawtext_filter_for_timestamp(&CompiledTimestampOverlay {
+            format: "%Y-%m-%d %H:%M:%S UTC".to_string(),
+            timezone: OverlayTimezone::Utc,
+            style: CompiledTextOverlayStyle {
+                position: OverlayPosition::TopLeft,
+                font_size: 18,
+                font_color: "white".to_string(),
+                background_color: "black".to_string(),
+                background_alpha: 60,
+                padding: 6,
+                margin: 12,
+            },
+        })
+        .expect("timestamp filter");
+
+        assert!(filter.contains("%{gmtime\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S UTC}"));
     }
 }

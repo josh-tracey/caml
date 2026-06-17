@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::Path, sync::Arc};
+use std::{collections::HashMap, fs::File, io::Read, path::Path, sync::Arc};
 
 use caml_core::{
     CamlCompiler, CamlManifest, CapabilityProbe, CompileError, CompiledGraph, RuntimeEngine,
@@ -33,6 +33,7 @@ pub struct RuntimeBuilder {
     #[cfg(feature = "pi")]
     libcamera_provider_factory: Option<Arc<dyn caml_linux_media::LibcameraProviderFactory>>,
     metrics: Option<Arc<dyn caml_core::metrics::MetricsExporter>>,
+    overlay_variables: HashMap<String, String>,
 }
 
 impl RuntimeBuilder {
@@ -153,6 +154,27 @@ impl RuntimeBuilder {
         self
     }
 
+    pub fn with_overlay_variable(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.overlay_variables.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn with_overlay_variables<I, K, V>(mut self, variables: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (key, value) in variables {
+            self.overlay_variables.insert(key.into(), value.into());
+        }
+        self
+    }
+
     pub fn compile(mut self) -> Result<Self, RuntimeBuilderError> {
         if self.compiled.is_none() {
             let manifest = self
@@ -161,9 +183,13 @@ impl RuntimeBuilder {
                 .ok_or(RuntimeBuilderError::MissingManifest)?;
 
             let compiled = if let Some(capability_probe) = self.capability_probe.as_ref() {
-                CamlCompiler::compile_with_probe(manifest, capability_probe.as_ref())?
+                CamlCompiler::compile_with_probe_and_overlay_variables(
+                    manifest,
+                    capability_probe.as_ref(),
+                    &self.overlay_variables,
+                )?
             } else {
-                CamlCompiler::compile(manifest)?
+                CamlCompiler::compile_with_overlay_variables(manifest, &self.overlay_variables)?
             };
             self.compiled = Some(compiled);
         }
@@ -180,9 +206,13 @@ impl RuntimeBuilder {
                 .as_ref()
                 .ok_or(RuntimeBuilderError::MissingManifest)?;
             if let Some(capability_probe) = self.capability_probe.as_ref() {
-                CamlCompiler::compile_with_probe(manifest, capability_probe.as_ref())?
+                CamlCompiler::compile_with_probe_and_overlay_variables(
+                    manifest,
+                    capability_probe.as_ref(),
+                    &self.overlay_variables,
+                )?
             } else {
-                CamlCompiler::compile(manifest)?
+                CamlCompiler::compile_with_overlay_variables(manifest, &self.overlay_variables)?
             }
         };
 
@@ -240,6 +270,7 @@ pub struct CamlPipelineBuilder {
     libcamera_provider_factory: Option<Arc<dyn caml_linux_media::LibcameraProviderFactory>>,
     use_native_adapters: bool,
     metrics: Option<Arc<dyn caml_core::metrics::MetricsExporter>>,
+    overlay_variables: HashMap<String, String>,
 }
 
 impl CamlPipelineBuilder {
@@ -253,6 +284,7 @@ impl CamlPipelineBuilder {
             libcamera_provider_factory: None,
             use_native_adapters: false,
             metrics: None,
+            overlay_variables: HashMap::new(),
         }
     }
 
@@ -307,16 +339,44 @@ impl CamlPipelineBuilder {
         self
     }
 
+    pub fn with_overlay_variable(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.overlay_variables.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn with_overlay_variables<I, K, V>(mut self, variables: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (key, value) in variables {
+            self.overlay_variables.insert(key.into(), value.into());
+        }
+        self
+    }
+
     pub async fn start(self) -> Result<CamlRuntime, CamlError> {
         let compiled = if let Some(ref probe) = self.capability_probe {
-            CamlCompiler::compile_with_probe(&self.manifest, probe.as_ref())?
+            CamlCompiler::compile_with_probe_and_overlay_variables(
+                &self.manifest,
+                probe.as_ref(),
+                &self.overlay_variables,
+            )?
         } else {
             if self.manifest.system.hardware_target != caml_core::frontend::HardwareTarget::GenericLinux {
                 return Err(CamlError::MissingCapabilityProbe {
                     hardware_target: self.manifest.system.hardware_target,
                 });
             }
-            CamlCompiler::compile(&self.manifest)?
+            CamlCompiler::compile_with_overlay_variables(
+                &self.manifest,
+                &self.overlay_variables,
+            )?
         };
 
         for pipeline in &compiled.pipelines {

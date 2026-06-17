@@ -427,6 +427,7 @@ mod tests {
             strategy: StreamStrategy::Passthrough,
             network: None,
             processing: None,
+            overlay: None,
             runtime: RuntimePolicy {
                 buffer_size: 1024,
                 watchdog_timeout: Duration::from_secs(5),

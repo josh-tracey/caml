@@ -62,8 +62,10 @@ pipelines:
     .expect("manifest should parse");
 
     let recording_packets = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let mut adapters = caml::adapters::BuiltinAdapters::default();
-    adapters.recording_packets = Some(recording_packets.clone());
+    let mut adapters = caml::adapters::BuiltinAdapters {
+        recording_packets: Some(recording_packets.clone()),
+        ..Default::default()
+    };
 
     #[cfg(feature = "ffmpeg")]
     {

@@ -120,6 +120,86 @@ pub struct ProcessingProfile {
     pub rotation: Option<i32>,
 }
 
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayPosition {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestampSource {
+    #[default]
+    WallClock,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayTimezone {
+    Local,
+    #[default]
+    Utc,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TextOverlayStyle {
+    #[serde(default)]
+    pub font_size: Option<u32>,
+    #[serde(default)]
+    pub font_color: Option<String>,
+    #[serde(default)]
+    pub background_color: Option<String>,
+    #[serde(default)]
+    pub background_alpha: Option<u8>,
+    #[serde(default)]
+    pub padding: Option<u32>,
+    #[serde(default)]
+    pub margin: Option<u32>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OverlayLayer {
+    Timestamp {
+        position: OverlayPosition,
+        #[serde(default)]
+        source: TimestampSource,
+        #[serde(default)]
+        timezone: OverlayTimezone,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(flatten)]
+        style: TextOverlayStyle,
+    },
+    Text {
+        text: String,
+        position: OverlayPosition,
+        #[serde(flatten)]
+        style: TextOverlayStyle,
+    },
+    Watermark {
+        image_path: String,
+        position: OverlayPosition,
+        #[serde(default)]
+        max_width_px: Option<u32>,
+        #[serde(default)]
+        opacity: Option<u8>,
+        #[serde(default)]
+        margin: Option<u32>,
+    },
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OverlayProfile {
+    pub layers: Vec<OverlayLayer>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PipelineNode {
@@ -132,6 +212,7 @@ pub struct PipelineNode {
     pub network: Option<NetworkProfile>,
     pub capture: Option<CaptureProfile>,
     pub processing: Option<ProcessingProfile>,
+    pub overlay: Option<OverlayProfile>,
     #[serde(default)]
     pub outputs: Vec<OutputProfile>,
 }
@@ -194,6 +275,12 @@ impl CamlManifest {
                             pipeline.id
                         )));
                     }
+                    if pipeline.overlay.is_some() {
+                        return Err(ManifestError::Validation(format!(
+                            "pipeline '{}' defines overlay but overlays require transcode or hardware_decode",
+                            pipeline.id
+                        )));
+                    }
                 }
                 StreamStrategy::Transcode => {
                     if pipeline.processing.is_none() {
@@ -211,6 +298,10 @@ impl CamlManifest {
                         )));
                     }
                 }
+            }
+
+            if let Some(overlay) = pipeline.overlay.as_ref() {
+                validate_overlay_profile(&pipeline.id, overlay)?;
             }
 
             match pipeline.input_type {
@@ -257,6 +348,91 @@ fn validate_device_input(pipeline_id: &str, input: &str) -> Result<(), ManifestE
     if !looks_like_path || input.contains("://") {
         return Err(ManifestError::Validation(format!(
             "pipeline '{}' must use a filesystem-like path for device input",
+            pipeline_id
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_overlay_profile(
+    pipeline_id: &str,
+    overlay: &OverlayProfile,
+) -> Result<(), ManifestError> {
+    if overlay.layers.is_empty() {
+        return Err(ManifestError::Validation(format!(
+            "pipeline '{}' defines overlay but provides no layers",
+            pipeline_id
+        )));
+    }
+
+    for layer in &overlay.layers {
+        match layer {
+            OverlayLayer::Timestamp { format, style, .. } => {
+                validate_text_overlay_style(pipeline_id, style)?;
+                if format
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                {
+                    return Err(ManifestError::Validation(format!(
+                        "pipeline '{}' timestamp overlay format cannot be empty",
+                        pipeline_id
+                    )));
+                }
+            }
+            OverlayLayer::Text { style, .. } => {
+                validate_text_overlay_style(pipeline_id, style)?;
+            }
+            OverlayLayer::Watermark {
+                image_path,
+                max_width_px,
+                opacity,
+                ..
+            } => {
+                if image_path.trim().is_empty() {
+                    return Err(ManifestError::Validation(format!(
+                        "pipeline '{}' watermark overlay image_path cannot be empty",
+                        pipeline_id
+                    )));
+                }
+                if image_path.contains("://") {
+                    return Err(ManifestError::Validation(format!(
+                        "pipeline '{}' watermark overlay image_path must reference a local file",
+                        pipeline_id
+                    )));
+                }
+                if max_width_px.is_some_and(|value| value == 0) {
+                    return Err(ManifestError::Validation(format!(
+                        "pipeline '{}' watermark overlay max_width_px must be greater than 0",
+                        pipeline_id
+                    )));
+                }
+                if opacity.is_some_and(|value| value > 100) {
+                    return Err(ManifestError::Validation(format!(
+                        "pipeline '{}' watermark overlay opacity must be between 0 and 100",
+                        pipeline_id
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_text_overlay_style(
+    pipeline_id: &str,
+    style: &TextOverlayStyle,
+) -> Result<(), ManifestError> {
+    if style.font_size.is_some_and(|value| value == 0) {
+        return Err(ManifestError::Validation(format!(
+            "pipeline '{}' overlay font_size must be greater than 0",
+            pipeline_id
+        )));
+    }
+    if style.background_alpha.is_some_and(|value| value > 100) {
+        return Err(ManifestError::Validation(format!(
+            "pipeline '{}' overlay background_alpha must be between 0 and 100",
             pipeline_id
         )));
     }

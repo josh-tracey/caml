@@ -51,9 +51,31 @@ Today, these crates cover concrete Linux media slices:
 
 - H.264 passthrough through FFmpeg and RTP packetization into a WebRTC track sink.
 - Software H.264 transcode for RTSP and V4L2 device video with optional 90/180/270-degree rotation.
+- Burned-in overlays for frame-processing pipelines (`transcode` and `hardware_decode`), including timestamps, templated text labels, and watermark images.
 - Pi 4 hardware-backed H.264 encode selection through FFmpeg's `h264_v4l2m2m` path.
 - Pi 5 stateless hardware decode selection through FFmpeg's `*_v4l2request` decoders, paired with software H.264 encode.
 - Physical device execution using native `libcamera`.
+
+## Overlay Support
+
+Overlays are available only on frame-processing pipelines:
+
+- `transcode`
+- `hardware_decode`
+
+`passthrough` remains a true encoded-packet path and rejects overlay blocks during validation.
+
+Supported overlay layer types:
+
+- `timestamp`
+- `text`
+- `watermark`
+
+Text templates can use:
+
+- `{camera_id}`
+- `{pipeline_id}`
+- caller-provided variables injected through `RuntimeBuilder::with_overlay_variable(...)` or `CamlPipelineBuilder::with_overlay_variable(...)`
 
 ## Manifest Example
 
@@ -92,6 +114,30 @@ pipelines:
       frame_rate: 30
       bitrate: "512k"
       rotation: 90
+    overlay:
+      layers:
+        - type: "timestamp"
+          position: "top_left"
+        - type: "text"
+          text: "{drone_id} / {camera_id}"
+          position: "bottom_right"
+          font_color: "yellow"
+        - type: "watermark"
+          image_path: "./assets/skyfleet-logo.png"
+          position: "top_right"
+          max_width_px: 96
+          opacity: 75
+```
+
+Example builder usage for caller-provided overlay variables:
+
+```rust
+let runtime = caml::CamlPipeline::from_manifest_str(manifest)?
+    .with_feature_capability_probe()
+    .with_overlay_variable("drone_id", "DEV01")
+    .with_native_adapters()
+    .start()
+    .await?;
 ```
 
 ## Claim Checklist
@@ -111,5 +157,4 @@ As part of our commitment to hardware honesty, this checklist maps `caml`'s bold
 - [x] [Class-Specific Recovery Behavior](docs/claims.md#class-specific-recovery-behavior): Differentiated backoff policies for network, device, and hardware classes.
 
 *(Performance claims and zero-copy semantics link to benchmark artifacts as they are finalized. Benchmarks can be run using `cargo bench`.)*
-
 

@@ -55,6 +55,10 @@ impl CapabilityProbe for LinuxCapabilityProbe {
                 &media_names,
                 inspector.has_media_nodes(),
             ),
+            has_drawtext_filter: false,
+            has_overlay_filter: false,
+            has_scale_filter: false,
+            has_color_channel_mixer_filter: false,
         })
     }
 }

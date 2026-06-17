@@ -1,7 +1,8 @@
 use std::io::Cursor;
 
 use caml::{
-    CamlManifest, HardwareTarget, InputBackend, InputType, ManifestError, StreamStrategy, Transport,
+    CamlManifest, HardwareTarget, InputBackend, InputType, ManifestError, OverlayPosition,
+    StreamStrategy, Transport,
 };
 
 fn valid_manifest() -> &'static str {
@@ -196,4 +197,98 @@ pipelines:
     let error = CamlManifest::from_yaml_str(manifest).expect_err("manifest should be invalid");
     assert!(matches!(error, ManifestError::Validation(_)));
     assert!(error.to_string().contains("processing"));
+}
+
+#[test]
+fn rejects_passthrough_pipeline_with_overlay() {
+    let manifest = r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "bad_overlay"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "passthrough"
+    network:
+      transport: "tcp"
+      packet_size_limit: 1200
+      stall_timeout: 10s
+    overlay:
+      layers:
+        - type: "text"
+          text: "{camera_id}"
+          position: "top_left"
+"#;
+
+    let error = CamlManifest::from_yaml_str(manifest).expect_err("manifest should be invalid");
+    assert!(matches!(error, ManifestError::Validation(_)));
+    assert!(error.to_string().contains("overlays require transcode or hardware_decode"));
+}
+
+#[test]
+fn rejects_empty_watermark_path() {
+    let manifest = r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "bad_watermark"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "watermark"
+          image_path: ""
+          position: "bottom_right"
+"#;
+
+    let error = CamlManifest::from_yaml_str(manifest).expect_err("manifest should be invalid");
+    assert!(matches!(error, ManifestError::Validation(_)));
+    assert!(error.to_string().contains("image_path cannot be empty"));
+}
+
+#[test]
+fn parses_overlay_position_variants() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "overlay_ok"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "text"
+          text: "{camera_id}"
+          position: "bottom_right"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let overlay = manifest.pipelines[0].overlay.as_ref().expect("overlay should exist");
+    match &overlay.layers[0] {
+        caml::OverlayLayer::Text { position, .. } => {
+            assert_eq!(*position, OverlayPosition::BottomRight);
+        }
+        other => panic!("unexpected overlay layer: {:?}", other),
+    }
 }

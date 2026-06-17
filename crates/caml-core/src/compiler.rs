@@ -1,15 +1,24 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 
 use crate::{
     error::CompileError,
     frontend::{
         CamlManifest, HardwareTarget, InputBackend, InputType, NetworkProfile, OutputProfile,
-        PipelineNode, ProcessingProfile, StreamStrategy, Transport,
+        OverlayLayer, OverlayPosition, OverlayProfile, OverlayTimezone, PipelineNode,
+        ProcessingProfile, StreamStrategy, TextOverlayStyle, Transport,
     },
 };
 
 const DEFAULT_PACKET_BUFFER_SIZE: usize = 2_048;
 const DEFAULT_STALL_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_OVERLAY_FONT_SIZE_PX: u32 = 18;
+const DEFAULT_OVERLAY_FONT_COLOR: &str = "white";
+const DEFAULT_OVERLAY_BACKGROUND_COLOR: &str = "black";
+const DEFAULT_OVERLAY_BACKGROUND_ALPHA: u8 = 60;
+const DEFAULT_OVERLAY_PADDING_PX: u32 = 6;
+const DEFAULT_OVERLAY_MARGIN_PX: u32 = 12;
+const DEFAULT_TIMESTAMP_FORMAT_UTC: &str = "%Y-%m-%d %H:%M:%S UTC";
+const DEFAULT_TIMESTAMP_FORMAT_LOCAL: &str = "%Y-%m-%d %H:%M:%S";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedInputBackend {
@@ -47,6 +56,10 @@ pub enum CapabilityRequirement {
     RtpPacketization,
     Pi4HardwareEncoder,
     Pi5StatelessDecoder,
+    DrawTextFilter,
+    OverlayFilter,
+    ScaleFilter,
+    ColorChannelMixerFilter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -58,6 +71,10 @@ pub struct HostCapabilities {
     pub pi_model: Option<PiModel>,
     pub has_pi4_h264_encoder: bool,
     pub has_pi5_stateless_decoder: bool,
+    pub has_drawtext_filter: bool,
+    pub has_overlay_filter: bool,
+    pub has_scale_filter: bool,
+    pub has_color_channel_mixer_filter: bool,
 }
 
 impl HostCapabilities {
@@ -83,6 +100,11 @@ impl HostCapabilities {
             has_pi4_h264_encoder: self.has_pi4_h264_encoder || other.has_pi4_h264_encoder,
             has_pi5_stateless_decoder: self.has_pi5_stateless_decoder
                 || other.has_pi5_stateless_decoder,
+            has_drawtext_filter: self.has_drawtext_filter || other.has_drawtext_filter,
+            has_overlay_filter: self.has_overlay_filter || other.has_overlay_filter,
+            has_scale_filter: self.has_scale_filter || other.has_scale_filter,
+            has_color_channel_mixer_filter: self.has_color_channel_mixer_filter
+                || other.has_color_channel_mixer_filter,
         })
     }
 }
@@ -200,6 +222,7 @@ pub struct CompiledPipeline {
     pub strategy: StreamStrategy,
     pub network: Option<CompiledNetworkProfile>,
     pub processing: Option<CompiledProcessingProfile>,
+    pub overlay: Option<CompiledOverlayProfile>,
     pub runtime: RuntimePolicy,
     pub resolved_backend: ResolvedInputBackend,
     pub execution_mode: ExecutionMode,
@@ -222,6 +245,7 @@ impl CompiledPipeline {
             strategy: StreamStrategy::Passthrough,
             network: None,
             processing: None,
+            overlay: None,
             runtime: RuntimePolicy {
                 buffer_size: 1,
                 watchdog_timeout: Duration::from_secs(0),
@@ -269,6 +293,51 @@ pub struct CompiledProcessingProfile {
     pub rotation: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledOverlayProfile {
+    pub layers: Vec<CompiledOverlayLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompiledOverlayLayer {
+    Timestamp(CompiledTimestampOverlay),
+    Text(CompiledTextOverlay),
+    Watermark(CompiledWatermarkOverlay),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledTextOverlayStyle {
+    pub position: OverlayPosition,
+    pub font_size: u32,
+    pub font_color: String,
+    pub background_color: String,
+    pub background_alpha: u8,
+    pub padding: u32,
+    pub margin: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledTimestampOverlay {
+    pub format: String,
+    pub timezone: OverlayTimezone,
+    pub style: CompiledTextOverlayStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledTextOverlay {
+    pub text: String,
+    pub style: CompiledTextOverlayStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledWatermarkOverlay {
+    pub image_path: String,
+    pub position: OverlayPosition,
+    pub max_width_px: Option<u32>,
+    pub opacity: u8,
+    pub margin: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveryPolicy {
     pub class: RecoveryClass,
@@ -297,10 +366,19 @@ pub struct CamlCompiler;
 
 impl CamlCompiler {
     pub fn validate_and_compile(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
-        Self::compile_unchecked(manifest)
+        let overlay_variables = HashMap::new();
+        Self::compile_unchecked_with_overlay_variables(manifest, &overlay_variables)
     }
 
     pub fn compile(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
+        let overlay_variables = HashMap::new();
+        Self::compile_with_overlay_variables(manifest, &overlay_variables)
+    }
+
+    pub fn compile_with_overlay_variables(
+        manifest: &CamlManifest,
+        overlay_variables: &HashMap<String, String>,
+    ) -> Result<CompiledGraph, CompileError> {
         if manifest.system.hardware_target != HardwareTarget::GenericLinux {
             return Err(CompileError::InvalidConfiguration(
                 "hardware-target compilation requires a capability probe. \
@@ -308,24 +386,46 @@ impl CamlCompiler {
                     .to_string(),
             ));
         }
-        Self::compile_internal(manifest, None)
+        Self::compile_internal(manifest, None, overlay_variables)
     }
 
     pub fn compile_unchecked(manifest: &CamlManifest) -> Result<CompiledGraph, CompileError> {
-        Self::compile_internal(manifest, None)
+        let overlay_variables = HashMap::new();
+        Self::compile_unchecked_with_overlay_variables(manifest, &overlay_variables)
+    }
+
+    pub fn compile_unchecked_with_overlay_variables(
+        manifest: &CamlManifest,
+        overlay_variables: &HashMap<String, String>,
+    ) -> Result<CompiledGraph, CompileError> {
+        Self::compile_internal(manifest, None, overlay_variables)
     }
 
     pub fn compile_with_probe(
         manifest: &CamlManifest,
         capability_probe: &dyn CapabilityProbe,
     ) -> Result<CompiledGraph, CompileError> {
+        let overlay_variables = HashMap::new();
+        Self::compile_with_probe_and_overlay_variables(
+            manifest,
+            capability_probe,
+            &overlay_variables,
+        )
+    }
+
+    pub fn compile_with_probe_and_overlay_variables(
+        manifest: &CamlManifest,
+        capability_probe: &dyn CapabilityProbe,
+        overlay_variables: &HashMap<String, String>,
+    ) -> Result<CompiledGraph, CompileError> {
         let capabilities = capability_probe.capabilities(manifest.system.hardware_target)?;
-        Self::compile_internal(manifest, Some(&capabilities))
+        Self::compile_internal(manifest, Some(&capabilities), overlay_variables)
     }
 
     fn compile_internal(
         manifest: &CamlManifest,
         capabilities: Option<&HostCapabilities>,
+        overlay_variables: &HashMap<String, String>,
     ) -> Result<CompiledGraph, CompileError> {
         if let Some(capabilities) = capabilities {
             validate_host_target(manifest.system.hardware_target, capabilities)?;
@@ -340,7 +440,7 @@ impl CamlCompiler {
             }
 
             validate_pipeline(manifest, pipeline, capabilities)?;
-            pipelines.push(compile_pipeline(pipeline));
+            pipelines.push(compile_pipeline(pipeline, overlay_variables)?);
         }
 
         let cma_allocation_limit_bytes = match (
@@ -460,6 +560,13 @@ fn validate_pipeline(
         )));
     }
 
+    if matches!(pipeline.strategy, StreamStrategy::Passthrough) && pipeline.overlay.is_some() {
+        return Err(CompileError::InvalidConfiguration(format!(
+            "pipeline '{}' defines overlay but overlays require transcode or hardware_decode",
+            pipeline.id
+        )));
+    }
+
     if matches!(pipeline.strategy, StreamStrategy::Transcode) && pipeline.processing.is_none() {
         return Err(CompileError::InvalidConfiguration(format!(
             "pipeline '{}' uses transcode and requires a processing profile",
@@ -524,9 +631,17 @@ fn validate_pipeline(
     Ok(())
 }
 
-fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
+fn compile_pipeline(
+    pipeline: &PipelineNode,
+    overlay_variables: &HashMap<String, String>,
+) -> Result<CompiledPipeline, CompileError> {
     let network = pipeline.network.as_ref().map(compile_network_profile);
     let processing = pipeline.processing.as_ref().map(compile_processing_profile);
+    let overlay = pipeline
+        .overlay
+        .as_ref()
+        .map(|profile| compile_overlay_profile(&pipeline.id, profile, overlay_variables))
+        .transpose()?;
     let buffer_count = match pipeline.strategy {
         StreamStrategy::Passthrough => 100,
         StreamStrategy::Transcode => 64,
@@ -544,7 +659,7 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         buffer_count,
     };
 
-    CompiledPipeline {
+    Ok(CompiledPipeline {
         id: pipeline.id.clone(),
         input: CompiledInput {
             kind: pipeline.input_type,
@@ -553,6 +668,7 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         strategy: pipeline.strategy,
         network,
         processing,
+        overlay,
         runtime,
         resolved_backend: resolve_backend(pipeline),
         execution_mode: resolve_execution_mode(pipeline.strategy),
@@ -560,7 +676,7 @@ fn compile_pipeline(pipeline: &PipelineNode) -> CompiledPipeline {
         recovery: recovery_policy_for(pipeline),
         capability_requirements: capability_requirements_for(pipeline),
         outputs: pipeline.outputs.clone(),
-    }
+    })
 }
 
 fn recovery_policy_for(pipeline: &PipelineNode) -> RecoveryPolicy {
@@ -635,6 +751,85 @@ fn compile_processing_profile(profile: &ProcessingProfile) -> CompiledProcessing
     }
 }
 
+fn compile_overlay_profile(
+    pipeline_id: &str,
+    profile: &OverlayProfile,
+    overlay_variables: &HashMap<String, String>,
+) -> Result<CompiledOverlayProfile, CompileError> {
+    let pipeline_overlay_variables = overlay_variables_for_pipeline(pipeline_id, overlay_variables);
+    let layers = profile
+        .layers
+        .iter()
+        .map(|layer| compile_overlay_layer(pipeline_id, layer, &pipeline_overlay_variables))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(CompiledOverlayProfile { layers })
+}
+
+fn compile_overlay_layer(
+    pipeline_id: &str,
+    layer: &OverlayLayer,
+    overlay_variables: &HashMap<String, String>,
+) -> Result<CompiledOverlayLayer, CompileError> {
+    match layer {
+        OverlayLayer::Timestamp {
+            position,
+            timezone,
+            format,
+            style,
+            ..
+        } => Ok(CompiledOverlayLayer::Timestamp(CompiledTimestampOverlay {
+            format: format.clone().unwrap_or_else(|| default_timestamp_format(*timezone)),
+            timezone: *timezone,
+            style: compile_text_overlay_style(*position, style),
+        })),
+        OverlayLayer::Text {
+            text,
+            position,
+            style,
+        } => Ok(CompiledOverlayLayer::Text(CompiledTextOverlay {
+            text: expand_overlay_template(pipeline_id, text, overlay_variables)?,
+            style: compile_text_overlay_style(*position, style),
+        })),
+        OverlayLayer::Watermark {
+            image_path,
+            position,
+            max_width_px,
+            opacity,
+            margin,
+        } => Ok(CompiledOverlayLayer::Watermark(CompiledWatermarkOverlay {
+            image_path: image_path.clone(),
+            position: *position,
+            max_width_px: *max_width_px,
+            opacity: opacity.unwrap_or(100),
+            margin: margin.unwrap_or(DEFAULT_OVERLAY_MARGIN_PX),
+        })),
+    }
+}
+
+fn compile_text_overlay_style(
+    position: OverlayPosition,
+    style: &TextOverlayStyle,
+) -> CompiledTextOverlayStyle {
+    CompiledTextOverlayStyle {
+        position,
+        font_size: style.font_size.unwrap_or(DEFAULT_OVERLAY_FONT_SIZE_PX),
+        font_color: style
+            .font_color
+            .clone()
+            .unwrap_or_else(|| DEFAULT_OVERLAY_FONT_COLOR.to_string()),
+        background_color: style
+            .background_color
+            .clone()
+            .unwrap_or_else(|| DEFAULT_OVERLAY_BACKGROUND_COLOR.to_string()),
+        background_alpha: style
+            .background_alpha
+            .unwrap_or(DEFAULT_OVERLAY_BACKGROUND_ALPHA),
+        padding: style.padding.unwrap_or(DEFAULT_OVERLAY_PADDING_PX),
+        margin: style.margin.unwrap_or(DEFAULT_OVERLAY_MARGIN_PX),
+    }
+}
+
 fn resolve_backend(pipeline: &PipelineNode) -> ResolvedInputBackend {
     match pipeline.input_type {
         InputType::Rtsp => ResolvedInputBackend::FfmpegRtsp,
@@ -700,7 +895,99 @@ fn capability_requirements_for(pipeline: &PipelineNode) -> Vec<CapabilityRequire
         requirements.push(CapabilityRequirement::Pi5StatelessDecoder);
     }
 
+    if overlay_uses_text(pipeline.overlay.as_ref()) {
+        requirements.push(CapabilityRequirement::DrawTextFilter);
+    }
+
+    if overlay_uses_watermark(pipeline.overlay.as_ref()) {
+        requirements.push(CapabilityRequirement::OverlayFilter);
+        requirements.push(CapabilityRequirement::ScaleFilter);
+        requirements.push(CapabilityRequirement::ColorChannelMixerFilter);
+    }
+
     requirements
+}
+
+fn overlay_uses_text(overlay: Option<&OverlayProfile>) -> bool {
+    overlay.is_some_and(|profile| {
+        profile.layers.iter().any(|layer| {
+            matches!(layer, OverlayLayer::Timestamp { .. } | OverlayLayer::Text { .. })
+        })
+    })
+}
+
+fn overlay_uses_watermark(overlay: Option<&OverlayProfile>) -> bool {
+    overlay.is_some_and(|profile| {
+        profile
+            .layers
+            .iter()
+            .any(|layer| matches!(layer, OverlayLayer::Watermark { .. }))
+    })
+}
+
+fn overlay_variables_for_pipeline(
+    pipeline_id: &str,
+    overlay_variables: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut resolved = overlay_variables.clone();
+    resolved.insert("camera_id".to_string(), pipeline_id.to_string());
+    resolved.insert("pipeline_id".to_string(), pipeline_id.to_string());
+    resolved
+}
+
+fn expand_overlay_template(
+    pipeline_id: &str,
+    template: &str,
+    overlay_variables: &HashMap<String, String>,
+) -> Result<String, CompileError> {
+    let mut output = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            let mut key = String::new();
+            let mut terminated = false;
+            for next in chars.by_ref() {
+                if next == '}' {
+                    terminated = true;
+                    break;
+                }
+                key.push(next);
+            }
+
+            if !terminated {
+                return Err(CompileError::InvalidConfiguration(format!(
+                    "pipeline '{}' overlay template contains an unterminated variable placeholder",
+                    pipeline_id
+                )));
+            }
+
+            let key = key.trim();
+            let value = overlay_variables.get(key).ok_or_else(|| {
+                CompileError::InvalidConfiguration(format!(
+                    "pipeline '{}' overlay template references unknown variable '{}'",
+                    pipeline_id, key
+                ))
+            })?;
+            output.push_str(value);
+        } else if ch == '}' {
+            return Err(CompileError::InvalidConfiguration(format!(
+                "pipeline '{}' overlay template contains an unmatched closing brace",
+                pipeline_id
+            )));
+        } else {
+            output.push(ch);
+        }
+    }
+
+    Ok(output)
+}
+
+fn default_timestamp_format(timezone: OverlayTimezone) -> String {
+    match timezone {
+        OverlayTimezone::Utc => DEFAULT_TIMESTAMP_FORMAT_UTC.to_string(),
+        OverlayTimezone::Local => DEFAULT_TIMESTAMP_FORMAT_LOCAL.to_string(),
+    }
 }
 
 impl CapabilityRequirement {
@@ -747,6 +1034,32 @@ impl CapabilityRequirement {
             {
                 Err(CompileError::UnsupportedCapability(format!(
                     "pipeline '{}' requires a Raspberry Pi 5 stateless decoder that was not detected",
+                    pipeline_id
+                )))
+            }
+            CapabilityRequirement::DrawTextFilter if !capabilities.has_drawtext_filter => Err(
+                CompileError::UnsupportedCapability(format!(
+                    "pipeline '{}' requires the FFmpeg drawtext filter but it was not detected",
+                    pipeline_id
+                )),
+            ),
+            CapabilityRequirement::OverlayFilter if !capabilities.has_overlay_filter => Err(
+                CompileError::UnsupportedCapability(format!(
+                    "pipeline '{}' requires the FFmpeg overlay filter but it was not detected",
+                    pipeline_id
+                )),
+            ),
+            CapabilityRequirement::ScaleFilter if !capabilities.has_scale_filter => Err(
+                CompileError::UnsupportedCapability(format!(
+                    "pipeline '{}' requires the FFmpeg scale filter but it was not detected",
+                    pipeline_id
+                )),
+            ),
+            CapabilityRequirement::ColorChannelMixerFilter
+                if !capabilities.has_color_channel_mixer_filter =>
+            {
+                Err(CompileError::UnsupportedCapability(format!(
+                    "pipeline '{}' requires the FFmpeg colorchannelmixer filter but it was not detected",
                     pipeline_id
                 )))
             }

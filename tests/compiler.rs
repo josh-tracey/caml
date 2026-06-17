@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use caml::{
     CamlCompiler, CamlManifest, CompileError, CompositeCapabilityProbe, HostCapabilities, PiModel,
@@ -327,5 +327,162 @@ pipelines:
     assert_eq!(
         compiled.pipelines[2].recovery.class,
         caml::RecoveryClass::Hardware
+    );
+}
+
+#[test]
+fn compiles_overlay_for_transcode_pipeline() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "overlay_transcode"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "timestamp"
+          position: "top_left"
+        - type: "text"
+          text: "{drone_id}:{camera_id}"
+          position: "bottom_right"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let overlay_variables = HashMap::from([("drone_id".to_string(), "DEV01".to_string())]);
+    let compiled = CamlCompiler::compile_with_overlay_variables(&manifest, &overlay_variables)
+        .expect("compiler should succeed");
+
+    let overlay = compiled.pipelines[0].overlay.as_ref().expect("overlay should exist");
+    assert_eq!(overlay.layers.len(), 2);
+    match &overlay.layers[1] {
+        caml::CompiledOverlayLayer::Text(text) => {
+            assert_eq!(text.text, "DEV01:overlay_transcode");
+        }
+        other => panic!("unexpected overlay layer: {:?}", other),
+    }
+}
+
+#[test]
+fn compiles_overlay_for_hardware_decode_pipeline() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "RASPBERRY_PI_5"
+  cma_allocation_limit: "256MB"
+pipelines:
+  - id: "decode_overlay"
+    input: "rtsp://127.0.0.1:8554/live"
+    type: "rtsp"
+    strategy: "hardware_decode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "text"
+          text: "{camera_id}"
+          position: "top_right"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let compiled = CamlCompiler::compile_unchecked(&manifest).expect("compiler should succeed");
+    assert!(compiled.pipelines[0].overlay.is_some());
+}
+
+#[test]
+fn rejects_unknown_overlay_template_variable() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "overlay_text"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "text"
+          text: "{missing_key}"
+          position: "top_left"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let error = CamlCompiler::compile_with_overlay_variables(&manifest, &HashMap::new())
+        .expect_err("compiler should reject unknown overlay variable");
+    assert!(matches!(error, CompileError::InvalidConfiguration(_)));
+    assert!(error.to_string().contains("unknown variable"));
+}
+
+#[test]
+fn rejects_missing_overlay_capabilities_when_probe_disagrees() {
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
+system:
+  hardware_target: "GENERIC_LINUX"
+  cma_allocation_limit: "128MB"
+pipelines:
+  - id: "overlay_caps"
+    input: "/dev/video0"
+    type: "device"
+    strategy: "transcode"
+    processing:
+      codec: "h264"
+      encoder: "software"
+      preset: "ultrafast"
+      tune: "zerolatency"
+      frame_rate: 30
+      bitrate: "512k"
+    overlay:
+      layers:
+        - type: "text"
+          text: "{camera_id}"
+          position: "top_left"
+        - type: "watermark"
+          image_path: "./logo.png"
+          position: "bottom_right"
+"#,
+    )
+    .expect("manifest should parse");
+
+    let probe = StaticCapabilityProbe::new(HostCapabilities {
+        ffmpeg_available: true,
+        v4l2_available: true,
+        ..HostCapabilities::default()
+    });
+    let error = CamlCompiler::compile_with_probe(&manifest, &probe)
+        .expect_err("compile should reject missing overlay filter capabilities");
+
+    assert!(matches!(error, CompileError::UnsupportedCapability(_)));
+    assert!(
+        error.to_string().contains("drawtext")
+            || error.to_string().contains("overlay")
+            || error.to_string().contains("scale")
     );
 }

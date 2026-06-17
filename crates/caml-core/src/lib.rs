@@ -7,16 +7,18 @@ pub mod units;
 
 pub use compiler::{
     CamlCompiler, CapabilityProbe, CapabilityRequirement, CodecPath, CompiledGraph, CompiledInput,
-    CompiledNetworkProfile, CompiledPipeline, CompiledProcessingProfile, CompiledSystem,
-    CompositeCapabilityProbe, ExecutionMode, HostCapabilities, PiModel, RecoveryClass,
-    RecoveryPolicy, ResolvedInputBackend, ResourcePlan, RuntimePolicy, StaticCapabilityProbe,
-    BufferPoolPlan, ResourceWarning,
+    CompiledNetworkProfile, CompiledOverlayLayer, CompiledOverlayProfile, CompiledPipeline,
+    CompiledProcessingProfile, CompiledSystem, CompiledTextOverlay, CompiledTextOverlayStyle,
+    CompiledTimestampOverlay, CompiledWatermarkOverlay, CompositeCapabilityProbe, ExecutionMode,
+    HostCapabilities, PiModel, RecoveryClass, RecoveryPolicy, ResolvedInputBackend, ResourcePlan,
+    RuntimePolicy, StaticCapabilityProbe, BufferPoolPlan, ResourceWarning,
 };
 pub use error::{CompileError, ManifestError, RuntimeError};
 pub use frontend::{
     CamlManifest, DropPolicy as OutputDropPolicy, HardwareTarget, InputBackend, InputType,
-    NetworkProfile, OutputProfile, PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig,
-    Transport,
+    NetworkProfile, OutputProfile, OverlayLayer, OverlayPosition, OverlayProfile,
+    OverlayTimezone, PipelineNode, ProcessingProfile, StreamStrategy, SystemConfig,
+    TextOverlayStyle, TimestampSource, Transport,
 };
 
 pub use runtime::{
