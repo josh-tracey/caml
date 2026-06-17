@@ -101,8 +101,10 @@ pipelines:
             notify: notify.clone(),
         });
 
-        let mut adapters = BuiltinAdapters::default();
-        adapters.ffmpeg_source = Some(Arc::new(FfmpegSourceFactory::new()));
+        let mut adapters = BuiltinAdapters {
+            ffmpeg_source: Some(Arc::new(FfmpegSourceFactory::new())),
+            ..Default::default()
+        };
         adapters.webrtc_sinks.insert(
             "webrtc_pipeline".to_string(),
             Arc::new(WebRtcSinkFactory::from_writer(writer)),

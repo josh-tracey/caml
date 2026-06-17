@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -27,7 +27,6 @@ const DEFAULT_QUEUE_LIMIT: usize = 10;
 const H264_PAYLOAD_TYPE: u8 = 102;
 const VIDEO_CLOCK_RATE: u32 = 90_000;
 const DEFAULT_FRAME_DURATION: Duration = Duration::from_millis(33);
-const MIN_LATENESS_BUDGET: Duration = Duration::from_millis(50);
 
 pub fn webrtc_capabilities() -> StaticCapabilityProbe {
     StaticCapabilityProbe::new(HostCapabilities {
@@ -209,20 +208,10 @@ struct WebRtcSenderConfig {
     payload_type: u8,
     ssrc: u32,
     clock_rate: u32,
-    lateness_budget: Duration,
-}
-
-#[derive(Default)]
-struct SenderClock {
-    base_pts: Option<Duration>,
-    playback_start: Option<Instant>,
-    last_released_timestamp: Option<Duration>,
-    fallback_deadline: Option<Instant>,
 }
 
 struct DequeuedPacket {
     packet: EncodedPacket,
-    newer_keyframe_queued: bool,
     metrics: Option<Arc<dyn MetricsExporter>>,
 }
 
@@ -292,7 +281,6 @@ impl WebRtcSink {
             payload_type,
             ssrc,
             clock_rate,
-            lateness_budget: lateness_budget(default_frame_duration),
         };
         let sender_task = tokio::spawn(run_sender_loop(
             Arc::clone(&shared),
@@ -440,7 +428,6 @@ async fn run_sender_loop(
         Box::new(new_random_sequencer()),
         config.clock_rate,
     )) as Box<dyn Packetizer + Send + Sync>;
-    let mut clock = SenderClock::default();
 
     loop {
         let next = dequeue_packet(Arc::clone(&shared), Arc::clone(&notify)).await;
@@ -448,7 +435,7 @@ async fn run_sender_loop(
             return;
         };
 
-        if let Err(error) = process_packet(&config, &mut *packetizer, &mut clock, next).await {
+        if let Err(error) = process_packet(&config, &mut *packetizer, next).await {
             set_sender_error(&shared, &notify, error).await;
             return;
         }
@@ -468,12 +455,10 @@ async fn dequeue_packet(
             }
 
             if let Some(packet) = shared.queue.pop_front() {
-                let newer_keyframe_queued = shared.queue.iter().any(|queued| queued.is_keyframe);
                 let metrics = shared.metrics.clone();
                 notify.notify_waiters();
                 return Some(DequeuedPacket {
                     packet,
-                    newer_keyframe_queued,
                     metrics,
                 });
             }
@@ -493,7 +478,6 @@ async fn dequeue_packet(
 async fn process_packet(
     config: &WebRtcSenderConfig,
     packetizer: &mut (dyn Packetizer + Send + Sync),
-    clock: &mut SenderClock,
     next: DequeuedPacket,
 ) -> Result<(), RuntimeError> {
     let packet = next.packet;
@@ -513,26 +497,6 @@ async fn process_packet(
         .duration
         .or(config.default_frame_duration)
         .unwrap_or(DEFAULT_FRAME_DURATION);
-
-    if should_drop_for_timestamp(clock, packet.timestamp) {
-        return Ok(());
-    }
-
-    if should_drop_for_lateness(
-        clock,
-        packet.timestamp,
-        frame_duration,
-        config.lateness_budget,
-        packet.is_keyframe,
-        next.newer_keyframe_queued,
-    )
-    .await
-    {
-        if let Some(timestamp) = packet.timestamp {
-            clock.last_released_timestamp = Some(timestamp);
-        }
-        return Ok(());
-    }
 
     if let Some(metrics) = &next.metrics {
         metrics
@@ -558,56 +522,7 @@ async fn process_packet(
         config.writer.write_packet(&rtp_packet).await?;
     }
 
-    if let Some(timestamp) = packet.timestamp {
-        clock.last_released_timestamp = Some(timestamp);
-    }
-
     Ok(())
-}
-
-fn should_drop_for_timestamp(clock: &SenderClock, timestamp: Option<Duration>) -> bool {
-    match (clock.last_released_timestamp, timestamp) {
-        (Some(last), Some(current)) => current <= last,
-        _ => false,
-    }
-}
-
-async fn should_drop_for_lateness(
-    clock: &mut SenderClock,
-    timestamp: Option<Duration>,
-    frame_duration: Duration,
-    lateness_budget: Duration,
-    is_keyframe: bool,
-    newer_keyframe_queued: bool,
-) -> bool {
-    if let Some(timestamp) = timestamp {
-        let base_pts = *clock.base_pts.get_or_insert(timestamp);
-        let playback_start = *clock.playback_start.get_or_insert_with(Instant::now);
-        let scheduled_send = playback_start + timestamp.saturating_sub(base_pts);
-        let now = Instant::now();
-
-        if scheduled_send > now {
-            tokio::time::sleep(scheduled_send.duration_since(now)).await;
-            clock.fallback_deadline = Some(Instant::now() + frame_duration);
-            return false;
-        }
-
-        let lateness = now.duration_since(scheduled_send);
-        clock.fallback_deadline = Some(now + frame_duration);
-        if lateness > lateness_budget && (!is_keyframe || newer_keyframe_queued) {
-            return true;
-        }
-
-        return false;
-    }
-
-    let now = Instant::now();
-    let deadline = clock.fallback_deadline.get_or_insert(now);
-    if *deadline > now {
-        tokio::time::sleep(*deadline - now).await;
-    }
-    *deadline = Instant::now() + frame_duration;
-    false
 }
 
 async fn set_sender_error(
@@ -641,14 +556,6 @@ fn frontend_to_runtime_drop_policy(
     }
 }
 
-fn lateness_budget(default_frame_duration: Option<Duration>) -> Duration {
-    let baseline = default_frame_duration.unwrap_or(DEFAULT_FRAME_DURATION);
-    baseline
-        .checked_mul(2)
-        .unwrap_or(Duration::MAX)
-        .max(MIN_LATENESS_BUDGET)
-}
-
 fn duration_to_rtp_samples_with_rate(duration: Duration, clock_rate: u32) -> u32 {
     let nanos = duration.as_nanos();
     let samples = nanos
@@ -679,7 +586,7 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -698,13 +605,11 @@ mod tests {
     #[derive(Default)]
     struct RecorderWriter {
         packets: Mutex<VecDeque<Packet>>,
-        instants: Mutex<Vec<Instant>>,
     }
 
     #[async_trait]
     impl RtpPacketWriter for RecorderWriter {
         async fn write_packet(&self, packet: &Packet) -> Result<(), caml_core::RuntimeError> {
-            self.instants.lock().await.push(Instant::now());
             self.packets.lock().await.push_back(packet.clone());
             Ok(())
         }
@@ -892,138 +797,6 @@ mod tests {
         let packet = packets.front().unwrap();
         assert_eq!(packet.header.ssrc, 9999);
         assert_eq!(packet.header.payload_type, 123);
-    }
-
-    #[tokio::test]
-    async fn paces_in_order_frames_from_timestamps() {
-        let writer = Arc::new(RecorderWriter::default());
-        let factory = WebRtcSinkFactory::from_writer(writer.clone());
-        let pipeline = build_pipeline(None, caml_core::frontend::DropPolicy::Block);
-        let mut sink = factory
-            .build_sink(&pipeline)
-            .await
-            .expect("sink should build");
-        let mut context = make_context(&pipeline);
-
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(0)),
-                Some(Duration::from_millis(60)),
-                true,
-                0x20,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(60)),
-                Some(Duration::from_millis(60)),
-                false,
-                0x21,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-        sink.consume(MediaPayload::EndOfStream, &mut context)
-            .await
-            .unwrap();
-
-        let instants = writer.instants.lock().await.clone();
-        assert!(instants.len() >= 2);
-        let spacing = instants[1].duration_since(instants[0]);
-        assert!(
-            spacing >= Duration::from_millis(40),
-            "expected paced spacing, got {:?}",
-            spacing
-        );
-    }
-
-    #[tokio::test]
-    async fn drops_regressing_timestamps() {
-        let writer = Arc::new(RecorderWriter::default());
-        let factory = WebRtcSinkFactory::from_writer(writer.clone());
-        let pipeline = build_pipeline(None, caml_core::frontend::DropPolicy::Block);
-        let mut sink = factory
-            .build_sink(&pipeline)
-            .await
-            .expect("sink should build");
-        let mut context = make_context(&pipeline);
-
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(60)),
-                Some(Duration::from_millis(33)),
-                true,
-                0x30,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(30)),
-                Some(Duration::from_millis(33)),
-                false,
-                0x31,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-        sink.consume(MediaPayload::EndOfStream, &mut context)
-            .await
-            .unwrap();
-
-        let packets = writer.packets.lock().await;
-        assert_eq!(packets.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn drops_overly_late_delta_frames_before_packetization() {
-        let writer = Arc::new(RecorderWriter::default());
-        let factory = WebRtcSinkFactory::from_writer(writer.clone());
-        let pipeline = build_pipeline(None, caml_core::frontend::DropPolicy::Block);
-        let mut sink = factory
-            .build_sink(&pipeline)
-            .await
-            .expect("sink should build");
-        let mut context = make_context(&pipeline);
-
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(0)),
-                Some(Duration::from_millis(33)),
-                true,
-                0x40,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-
-        tokio::time::sleep(Duration::from_millis(130)).await;
-
-        sink.consume(
-            MediaPayload::EncodedPacket(encoded_packet(
-                Some(Duration::from_millis(10)),
-                Some(Duration::from_millis(33)),
-                false,
-                0x41,
-            )),
-            &mut context,
-        )
-        .await
-        .unwrap();
-        sink.consume(MediaPayload::EndOfStream, &mut context)
-            .await
-            .unwrap();
-
-        let packets = writer.packets.lock().await;
-        assert_eq!(packets.len(), 1);
     }
 
     #[test]
