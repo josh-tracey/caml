@@ -364,7 +364,10 @@ pipelines:
     let compiled = CamlCompiler::compile_with_overlay_variables(&manifest, &overlay_variables)
         .expect("compiler should succeed");
 
-    let overlay = compiled.pipelines[0].overlay.as_ref().expect("overlay should exist");
+    let overlay = compiled.pipelines[0]
+        .overlay
+        .as_ref()
+        .expect("overlay should exist");
     assert_eq!(overlay.layers.len(), 2);
     match &overlay.layers[1] {
         caml::CompiledOverlayLayer::Text(text) => {

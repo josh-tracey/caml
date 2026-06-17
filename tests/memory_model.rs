@@ -1,7 +1,6 @@
+use caml::runtime::{BufferPool, EncodedPacket, MediaStorage};
 use std::sync::Arc;
 use std::time::Duration;
-use caml::runtime::{BufferPool, EncodedPacket, MediaStorage};
-
 
 #[test]
 fn test_buffer_pool_preallocate_and_stats() {
@@ -42,7 +41,7 @@ fn test_buffer_pool_preallocate_and_stats() {
 #[test]
 fn test_buffer_pool_dynamic_allocation() {
     let pool = BufferPool::new(1024);
-    
+
     // Acquire when pool is empty should allocate dynamically
     let buf1 = pool.acquire();
     let stats = pool.stats();

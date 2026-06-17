@@ -49,7 +49,10 @@ pipelines:
     // First pipeline must have a WebRTC output
     let forward = &manifest.pipelines[0];
     assert!(
-        forward.outputs.iter().any(|o| matches!(o, OutputProfile::WebrtcRtp { .. })),
+        forward
+            .outputs
+            .iter()
+            .any(|o| matches!(o, OutputProfile::WebrtcRtp { .. })),
         "forward_primary must have a WebrtcRtp output"
     );
 

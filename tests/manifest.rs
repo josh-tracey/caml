@@ -42,7 +42,10 @@ fn parses_valid_manifest_into_typed_values() {
         manifest.system.hardware_target,
         HardwareTarget::RaspberryPi5
     );
-    assert_eq!(manifest.system.cma_allocation_limit.unwrap().as_bytes(), 512_000_000);
+    assert_eq!(
+        manifest.system.cma_allocation_limit.unwrap().as_bytes(),
+        512_000_000
+    );
     assert_eq!(manifest.pipelines[0].input_type, InputType::Rtsp);
     assert_eq!(manifest.pipelines[0].strategy, StreamStrategy::Passthrough);
     assert_eq!(
@@ -223,7 +226,9 @@ pipelines:
 
     let error = CamlManifest::from_yaml_str(manifest).expect_err("manifest should be invalid");
     assert!(matches!(error, ManifestError::Validation(_)));
-    assert!(error.to_string().contains("overlays require transcode or hardware_decode"));
+    assert!(error
+        .to_string()
+        .contains("overlays require transcode or hardware_decode"));
 }
 
 #[test]
@@ -284,7 +289,10 @@ pipelines:
     )
     .expect("manifest should parse");
 
-    let overlay = manifest.pipelines[0].overlay.as_ref().expect("overlay should exist");
+    let overlay = manifest.pipelines[0]
+        .overlay
+        .as_ref()
+        .expect("overlay should exist");
     match &overlay.layers[0] {
         caml::OverlayLayer::Text { position, .. } => {
             assert_eq!(*position, OverlayPosition::BottomRight);

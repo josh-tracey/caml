@@ -1,6 +1,6 @@
-use std::sync::OnceLock;
 use caml_core::{HostCapabilities, StaticCapabilityProbe};
 use ffmpeg_next as ffmpeg;
+use std::sync::OnceLock;
 
 pub fn init_ffmpeg() -> bool {
     static INIT_RESULT: OnceLock<bool> = OnceLock::new();

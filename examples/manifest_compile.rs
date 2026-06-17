@@ -3,7 +3,8 @@
 use caml::{CamlCompiler, CamlManifest};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let manifest = CamlManifest::from_yaml_str(r#"
+    let manifest = CamlManifest::from_yaml_str(
+        r#"
 system:
   hardware_target: "GENERIC_LINUX"
   cma_allocation_limit: "256MB"
@@ -23,16 +24,16 @@ pipelines:
         payload_type: 102
         mtu: 1200
         clock_rate: 90000
-"#)?;
+"#,
+    )?;
 
     let compiled = CamlCompiler::compile(&manifest)?;
 
     println!("Compiled {} pipeline(s)", compiled.pipelines.len());
     for pipeline in &compiled.pipelines {
-        println!("  Pipeline '{}': {:?} via {:?}",
-            pipeline.id,
-            pipeline.execution_mode,
-            pipeline.resolved_backend,
+        println!(
+            "  Pipeline '{}': {:?} via {:?}",
+            pipeline.id, pipeline.execution_mode, pipeline.resolved_backend,
         );
         println!("    Recovery class: {:?}", pipeline.recovery.class);
         println!("    Outputs: {}", pipeline.outputs.len());

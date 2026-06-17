@@ -1,9 +1,11 @@
-use std::thread;
 use async_trait::async_trait;
+use std::thread;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use caml_core::{CompiledPipeline, MediaSource, PipelineContext, RuntimeError, SourceFactory, MediaPayload};
+use caml_core::{
+    CompiledPipeline, MediaPayload, MediaSource, PipelineContext, RuntimeError, SourceFactory,
+};
 
 use crate::worker::{run_worker, worker_spec_for_pipeline, WorkerMessage};
 

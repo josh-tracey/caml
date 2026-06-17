@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use caml::{
-    runtime::RuntimeEvent, CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeEngine, TaskStatus,
-};
 use caml::runtime::mock::{
     MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
+};
+use caml::{
+    runtime::RuntimeEvent, CamlCompiler, CamlManifest, RuntimeAdapters, RuntimeEngine, TaskStatus,
 };
 
 #[tokio::test]
@@ -43,7 +43,7 @@ pipelines:
     .expect("manifest should parse");
 
     let mut compiled = CamlCompiler::compile(&manifest).expect("should compile");
-    
+
     // Override policies to make the test run fast
     for pipeline in &mut compiled.pipelines {
         pipeline.runtime.watchdog_timeout = Duration::from_millis(15);
@@ -100,7 +100,12 @@ pipelines:
     let mut finished = 0;
 
     while let Ok(event) = events.recv().await {
-        if let RuntimeEvent::StatusChanged { pipeline_id, status, .. } = event {
+        if let RuntimeEvent::StatusChanged {
+            pipeline_id,
+            status,
+            ..
+        } = event
+        {
             if status == TaskStatus::Recovering {
                 if pipeline_id == "net_chaos" {
                     net_recoveries += 1;

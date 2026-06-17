@@ -8,14 +8,13 @@ use caml_core::{
 };
 
 use crate::capabilities::init_ffmpeg;
-use crate::hwaccel::{transcode_backend_for_pipeline, TranscodeBackend};
 use crate::device::{
-    open_media_input, best_video_stream, codec_name, frame_duration_from_rate,
-    normalize_encoded_packet, duration_from_time_base, duration_from_packet,
-    frame_duration_from_processing,
+    best_video_stream, codec_name, duration_from_packet, duration_from_time_base,
+    frame_duration_from_processing, frame_duration_from_rate, normalize_encoded_packet,
+    open_media_input,
 };
 use crate::h264::extract_h264_config;
-
+use crate::hwaccel::{transcode_backend_for_pipeline, TranscodeBackend};
 
 pub const DEFAULT_FRAME_DURATION: Duration = Duration::from_millis(33);
 
@@ -80,7 +79,7 @@ pub fn run_worker(
         return Ok(());
     }
 
-    let is_local_file = !spec.input.starts_with("rtsp://") 
+    let is_local_file = !spec.input.starts_with("rtsp://")
         && !spec.input.starts_with("rtmp://")
         && !spec.input.starts_with("http://")
         && !spec.input.starts_with("https://")
@@ -94,7 +93,14 @@ pub fn run_worker(
         let result = match &spec.mode {
             WorkerMode::Passthrough {
                 default_frame_duration,
-            } => demux_packets(&spec.input, &spec.input_spec, *default_frame_duration, &tx, &cancel, is_local_file),
+            } => demux_packets(
+                &spec.input,
+                &spec.input_spec,
+                *default_frame_duration,
+                &tx,
+                &cancel,
+                is_local_file,
+            ),
             WorkerMode::Transcode {
                 processing,
                 overlay,
@@ -129,7 +135,10 @@ pub fn run_worker(
                     break;
                 }
                 Err(ref error) => {
-                    println!("caml-ffmpeg: Live stream connection lost ({}), retrying in 2 seconds...", error);
+                    println!(
+                        "caml-ffmpeg: Live stream connection lost ({}), retrying in 2 seconds...",
+                        error
+                    );
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 }
@@ -183,9 +192,12 @@ pub fn demux_packets(
 
         if is_local_file {
             if let Some(pts) = packet.pts() {
-                let pts_duration = duration_from_time_base(Some(pts), time_base).unwrap_or(Duration::ZERO);
+                let pts_duration =
+                    duration_from_time_base(Some(pts), time_base).unwrap_or(Duration::ZERO);
                 let first_pts = *first_pts_duration.get_or_insert(pts_duration);
-                let relative_duration = pts_duration.checked_sub(first_pts).unwrap_or(Duration::ZERO);
+                let relative_duration = pts_duration
+                    .checked_sub(first_pts)
+                    .unwrap_or(Duration::ZERO);
                 let target_time = start_instant + relative_duration;
                 let now = std::time::Instant::now();
                 if target_time > now {
@@ -197,8 +209,12 @@ pub fn demux_packets(
         let raw_data = packet
             .data()
             .ok_or_else(|| "ffmpeg returned a packet with no payload".to_string())?;
-        let normalized =
-            normalize_encoded_packet(codec_name_str, raw_data, packet.is_key(), h264_config.as_ref())?;
+        let normalized = normalize_encoded_packet(
+            codec_name_str,
+            raw_data,
+            packet.is_key(),
+            h264_config.as_ref(),
+        )?;
 
         let message = WorkerMessage::Packet(OwnedEncodedPacket {
             codec: codec_name_str.to_string(),
@@ -270,8 +286,7 @@ pub fn worker_spec_for_pipeline(pipeline: &CompiledPipeline) -> Result<WorkerSpe
             })?;
 
             validate_transcode_support(pipeline, &processing)?;
-            crate::transcode::validate_overlay_runtime(pipeline)
-                .map_err(RuntimeError::adapter)?;
+            crate::transcode::validate_overlay_runtime(pipeline).map_err(RuntimeError::adapter)?;
             let backend = transcode_backend_for_pipeline(pipeline)?;
 
             WorkerMode::Transcode {
@@ -290,8 +305,7 @@ pub fn worker_spec_for_pipeline(pipeline: &CompiledPipeline) -> Result<WorkerSpe
             })?;
 
             validate_transcode_support(pipeline, &processing)?;
-            crate::transcode::validate_overlay_runtime(pipeline)
-                .map_err(RuntimeError::adapter)?;
+            crate::transcode::validate_overlay_runtime(pipeline).map_err(RuntimeError::adapter)?;
             let backend = transcode_backend_for_pipeline(pipeline)?;
 
             WorkerMode::Transcode {

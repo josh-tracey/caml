@@ -7,7 +7,7 @@ use caml_core::{
         mock::{
             MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
         },
-        RuntimeAdapters, RuntimeEngine, TaskStatus, RuntimeEvent,
+        RuntimeAdapters, RuntimeEngine, RuntimeEvent, TaskStatus,
     },
 };
 

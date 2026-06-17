@@ -6,16 +6,13 @@
 //! * cloning a `MediaPayload` backed by a `PooledBuffer` does not heap-allocate
 //!   on the payload path (pool stats are used as the allocation witness).
 
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use caml::{
     runtime::{
-        BufferPool, DropPolicy, EncodedPacket, FanoutRouter, MediaPayload, MediaSink,
-        MediaStorage, PipelineContext, RecordedPacket, RecordingSink, SinkActorConfig,
+        BufferPool, DropPolicy, EncodedPacket, FanoutRouter, MediaPayload, MediaSink, MediaStorage,
+        PipelineContext, RecordedPacket, RecordingSink, SinkActorConfig,
     },
     CompiledPipeline, RuntimeError,
 };
@@ -148,10 +145,13 @@ async fn test_drop_newest_does_not_block_ingestion() {
     // Sending more frames than queue_limit must not block.
     for i in 0u8..10 {
         let payload = make_packet(&mut ctx, &[i]);
-        tokio::time::timeout(Duration::from_millis(200), router.consume(payload, &mut ctx))
-            .await
-            .expect("consume must not block when DropNewest policy is active")
-            .expect("fanout consume should not return an error");
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            router.consume(payload, &mut ctx),
+        )
+        .await
+        .expect("consume must not block when DropNewest policy is active")
+        .expect("fanout consume should not return an error");
     }
 }
 
@@ -172,10 +172,13 @@ async fn test_drop_oldest_does_not_block_ingestion() {
 
     for i in 0u8..10 {
         let payload = make_packet(&mut ctx, &[i]);
-        tokio::time::timeout(Duration::from_millis(200), router.consume(payload, &mut ctx))
-            .await
-            .expect("consume must not block when DropOldest policy is active")
-            .expect("fanout consume should not return an error");
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            router.consume(payload, &mut ctx),
+        )
+        .await
+        .expect("consume must not block when DropOldest policy is active")
+        .expect("fanout consume should not return an error");
     }
 }
 

@@ -1,4 +1,3 @@
-
 use caml_core::RuntimeError;
 use ffmpeg_next::Error as FfmpegError;
 
@@ -23,9 +22,12 @@ impl FfmpegErrorClass {
             _ => Self::Unknown,
         }
     }
-    
+
     pub fn is_recoverable(&self) -> bool {
-        matches!(self, Self::NetworkStall | Self::DeviceLost | Self::InvalidData)
+        matches!(
+            self,
+            Self::NetworkStall | Self::DeviceLost | Self::InvalidData
+        )
     }
 }
 

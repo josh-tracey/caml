@@ -73,9 +73,10 @@ impl PipelineFactory for BuiltinAdapters {
                     queue_limit,
                     drop_policy,
                 } => {
-                    let packets = self.recording_packets.clone().unwrap_or_else(|| {
-                        Arc::new(tokio::sync::Mutex::new(Vec::new()))
-                    });
+                    let packets = self
+                        .recording_packets
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(Vec::new())));
                     let queue_limit = queue_limit.unwrap_or(100);
                     sink_configs.push(caml_core::SinkActorConfig {
                         sink: Box::new(caml_core::runtime::RecordingSink { packets }),
@@ -92,11 +93,9 @@ impl PipelineFactory for BuiltinAdapters {
                     #[cfg(feature = "webrtc")]
                     {
                         if let Some(factory) = self.webrtc_sinks.get(&pipeline.id) {
-                            let webrtc_sink = caml_core::SinkFactory::build_sink(
-                                factory.as_ref(),
-                                pipeline,
-                            )
-                            .await?;
+                            let webrtc_sink =
+                                caml_core::SinkFactory::build_sink(factory.as_ref(), pipeline)
+                                    .await?;
                             let queue_limit = queue_limit.unwrap_or(10);
                             sink_configs.push(caml_core::SinkActorConfig {
                                 sink: webrtc_sink,
@@ -146,7 +145,6 @@ fn frontend_to_runtime_drop_policy(
         caml_core::frontend::DropPolicy::DropNewest => caml_core::DropPolicy::DropNewest,
     }
 }
-
 
 impl From<BuiltinAdapters> for caml_core::RuntimeFactory {
     fn from(adapters: BuiltinAdapters) -> Self {

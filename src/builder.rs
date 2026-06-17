@@ -149,7 +149,10 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn with_metrics_exporter(mut self, metrics: Arc<dyn caml_core::metrics::MetricsExporter>) -> Self {
+    pub fn with_metrics_exporter(
+        mut self,
+        metrics: Arc<dyn caml_core::metrics::MetricsExporter>,
+    ) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -235,13 +238,18 @@ pub enum CamlError {
     #[error(transparent)]
     Builder(#[from] RuntimeBuilderError),
     #[error("missing capability probe for hardware target {hardware_target:?}")]
-    MissingCapabilityProbe { hardware_target: caml_core::frontend::HardwareTarget },
+    MissingCapabilityProbe {
+        hardware_target: caml_core::frontend::HardwareTarget,
+    },
     #[error("missing WebRTC track for pipeline {pipeline_id}")]
     MissingWebRtcTrack { pipeline_id: String },
     #[error("missing libcamera provider factory for pipeline {pipeline_id}")]
     MissingLibcameraProvider { pipeline_id: String },
     #[error("missing adapter for pipeline {pipeline_id}, backend {backend}")]
-    MissingAdapter { pipeline_id: String, backend: String },
+    MissingAdapter {
+        pipeline_id: String,
+        backend: String,
+    },
     #[error("unsupported output for pipeline {pipeline_id}: {output}")]
     UnsupportedOutput { pipeline_id: String, output: String },
 }
@@ -334,7 +342,10 @@ impl CamlPipelineBuilder {
         self
     }
 
-    pub fn with_metrics_exporter(mut self, metrics: Arc<dyn caml_core::metrics::MetricsExporter>) -> Self {
+    pub fn with_metrics_exporter(
+        mut self,
+        metrics: Arc<dyn caml_core::metrics::MetricsExporter>,
+    ) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -368,19 +379,21 @@ impl CamlPipelineBuilder {
                 &self.overlay_variables,
             )?
         } else {
-            if self.manifest.system.hardware_target != caml_core::frontend::HardwareTarget::GenericLinux {
+            if self.manifest.system.hardware_target
+                != caml_core::frontend::HardwareTarget::GenericLinux
+            {
                 return Err(CamlError::MissingCapabilityProbe {
                     hardware_target: self.manifest.system.hardware_target,
                 });
             }
-            CamlCompiler::compile_with_overlay_variables(
-                &self.manifest,
-                &self.overlay_variables,
-            )?
+            CamlCompiler::compile_with_overlay_variables(&self.manifest, &self.overlay_variables)?
         };
 
         for pipeline in &compiled.pipelines {
-            let has_webrtc_output = pipeline.outputs.iter().any(|o| matches!(o, caml_core::frontend::OutputProfile::WebrtcRtp { .. }));
+            let has_webrtc_output = pipeline
+                .outputs
+                .iter()
+                .any(|o| matches!(o, caml_core::frontend::OutputProfile::WebrtcRtp { .. }));
             if has_webrtc_output {
                 #[cfg(feature = "webrtc")]
                 {

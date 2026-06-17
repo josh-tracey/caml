@@ -33,7 +33,7 @@ pipelines:
         MockSourceAction::Packet(vec![0x00, 0x00, 0x00, 0x01, 0x65]),
         MockSourceAction::EndOfStream,
     ]);
-    
+
     let source_factory = Arc::new(MockSourceFactory::new(HashMap::from([(
         "test_pipeline".to_string(),
         source_plan,
@@ -46,7 +46,7 @@ pipelines:
     )])));
 
     let adapters = RuntimeAdapters::new(source_factory, sink_factory);
-    
+
     // Start the runtime using the builder pattern
     let handle = RuntimeBuilder::from_manifest(manifest)
         .with_runtime_factory(adapters)

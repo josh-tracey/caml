@@ -1,9 +1,9 @@
-use criterion::{criterion_group, criterion_main, Criterion};
 use caml::runtime::BufferPool;
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn bench_buffer_pool_acquire_release(c: &mut Criterion) {
     let pool = BufferPool::new(1024);
-    
+
     // Preallocate to avoid allocations during measurement
     pool.preallocate(100);
 

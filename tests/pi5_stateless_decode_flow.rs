@@ -1,8 +1,8 @@
 #![cfg(feature = "pi")]
 
+use caml::{CamlManifest, CapabilityProbe, HardwareTarget, PiModel, RuntimeBuilder};
 use std::sync::Arc;
 use std::time::Duration;
-use caml::{CamlManifest, CapabilityProbe, HardwareTarget, RuntimeBuilder, PiModel};
 
 fn pi_host_tests_enabled() -> bool {
     std::env::var_os("CAML_PI_HOST_TESTS").is_some()
@@ -23,7 +23,9 @@ async fn test_pi5_stateless_decode_flow() {
         .expect("Linux capability probe should run");
 
     if capabilities.pi_model != Some(PiModel::Pi5) {
-        eprintln!("skipping Pi 5 stateless decode flow test: not running on Raspberry Pi 5 hardware");
+        eprintln!(
+            "skipping Pi 5 stateless decode flow test: not running on Raspberry Pi 5 hardware"
+        );
         return;
     }
 
@@ -55,7 +57,7 @@ pipelines:
       bitrate: "512k"
     outputs:
       - type: "recording"
-"#
+"#,
     )
     .expect("manifest should parse");
 
@@ -71,9 +73,9 @@ pipelines:
     }
     #[cfg(all(feature = "pi", target_os = "linux"))]
     {
-        adapters.libcamera_source = Some(Arc::new(
-            caml_linux_media::LibcameraSourceFactory::new(Arc::new(caml_linux_media::camera::NativeLibcameraFactory)),
-        ));
+        adapters.libcamera_source = Some(Arc::new(caml_linux_media::LibcameraSourceFactory::new(
+            Arc::new(caml_linux_media::camera::NativeLibcameraFactory),
+        )));
     }
 
     let builder = RuntimeBuilder::new()
@@ -81,7 +83,10 @@ pipelines:
         .with_capability_probe(Arc::new(probe))
         .with_runtime_factory(adapters);
 
-    let runtime = builder.start().await.expect("failed to start Pi 5 decode runtime");
+    let runtime = builder
+        .start()
+        .await
+        .expect("failed to start Pi 5 decode runtime");
 
     // Run for a bit
     tokio::time::sleep(Duration::from_secs(2)).await;

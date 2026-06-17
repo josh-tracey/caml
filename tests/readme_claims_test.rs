@@ -7,8 +7,16 @@ fn test_readme_claims_have_evidence() {
     let readme_path = manifest_dir.join("README.md");
     let claims_path = manifest_dir.join("docs/claims.md");
 
-    assert!(readme_path.exists(), "README.md not found at {:?}", readme_path);
-    assert!(claims_path.exists(), "docs/claims.md not found at {:?}", claims_path);
+    assert!(
+        readme_path.exists(),
+        "README.md not found at {:?}",
+        readme_path
+    );
+    assert!(
+        claims_path.exists(),
+        "docs/claims.md not found at {:?}",
+        claims_path
+    );
 
     let readme_content = fs::read_to_string(readme_path).unwrap();
     let claims_content = fs::read_to_string(claims_path).unwrap();
@@ -43,7 +51,10 @@ fn test_readme_claims_have_evidence() {
         }
     }
 
-    assert!(!checked_claims.is_empty(), "No checked claims found in README.md");
+    assert!(
+        !checked_claims.is_empty(),
+        "No checked claims found in README.md"
+    );
 
     for claim in checked_claims {
         let heading = format!("## {}", claim);

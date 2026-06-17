@@ -53,7 +53,7 @@ pipelines:
     .unwrap();
 
     let mut compiled = CamlCompiler::compile(&manifest).unwrap();
-    
+
     // Set buffer size to 1024
     compiled.pipelines[0].runtime.buffer_size = 1024;
 
@@ -68,10 +68,16 @@ pipelines:
         MockSourceAction::Packet(vec![0; 100]),
         MockSourceAction::EndOfStream,
     ];
-    let plans = HashMap::from([("alloc_test".to_string(), MockSourcePlan::new(warmup_actions))]);
-    
+    let plans = HashMap::from([(
+        "alloc_test".to_string(),
+        MockSourcePlan::new(warmup_actions),
+    )]);
+
     let source_factory = Arc::new(MockSourceFactory::new(plans));
-    let adapters = RuntimeAdapters::new(source_factory, Arc::new(MockSinkFactory::new(recorders.clone())));
+    let adapters = RuntimeAdapters::new(
+        source_factory,
+        Arc::new(MockSinkFactory::new(recorders.clone())),
+    );
 
     let handle = RuntimeEngine::start(compiled.clone(), adapters, None)
         .await
@@ -89,7 +95,10 @@ pipelines:
     }
     measurement_actions.push(MockSourceAction::EndOfStream);
 
-    let plans = HashMap::from([("alloc_test".to_string(), MockSourcePlan::new(measurement_actions))]);
+    let plans = HashMap::from([(
+        "alloc_test".to_string(),
+        MockSourcePlan::new(measurement_actions),
+    )]);
     let source_factory = Arc::new(MockSourceFactory::new(plans));
     let adapters = RuntimeAdapters::new(source_factory, Arc::new(MockSinkFactory::new(recorders)));
 
@@ -111,7 +120,10 @@ pipelines:
     TRACK_ALLOC.store(false, Ordering::Relaxed);
 
     let final_allocs = ALLOC_COUNT.load(Ordering::Relaxed);
-    println!("Total large allocations during measurement: {}", final_allocs);
+    println!(
+        "Total large allocations during measurement: {}",
+        final_allocs
+    );
 
     // Shutdown cleanly
     handle.shutdown().await.unwrap();

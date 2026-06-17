@@ -1,6 +1,6 @@
 //! Example: Run a full pipeline using the convenience builder pattern.
 
-use caml::{CamlPipeline, CamlError};
+use caml::{CamlError, CamlPipeline};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,7 +29,10 @@ pipelines:
     println!("Starting runtime...");
     let runtime = match builder.start().await {
         Ok(rt) => rt,
-        Err(CamlError::MissingAdapter { pipeline_id, backend }) => {
+        Err(CamlError::MissingAdapter {
+            pipeline_id,
+            backend,
+        }) => {
             println!(
                 "Notice: missing adapter for pipeline '{}' (backend '{}'). Ensure the feature is enabled.",
                 pipeline_id, backend

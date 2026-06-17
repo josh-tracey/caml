@@ -2,9 +2,9 @@
 //! Gated by the `webrtc` feature.
 
 #[cfg(feature = "webrtc")]
-use std::sync::Arc;
+use caml::{webrtc::TrackLocalStaticRTP, CamlPipeline};
 #[cfg(feature = "webrtc")]
-use caml::{CamlPipeline, webrtc::TrackLocalStaticRTP};
+use std::sync::Arc;
 #[cfg(feature = "webrtc")]
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 

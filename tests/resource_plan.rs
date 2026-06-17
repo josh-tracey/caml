@@ -68,7 +68,10 @@ pipelines:
     let manifest = CamlManifest::from_yaml_str(manifest_str).expect("should parse");
     let compiled = CamlCompiler::compile(&manifest);
     match compiled {
-        Err(CompileError::ResourceLimitExceeded { configured_limit_bytes, estimated_usage_bytes }) => {
+        Err(CompileError::ResourceLimitExceeded {
+            configured_limit_bytes,
+            estimated_usage_bytes,
+        }) => {
             assert_eq!(configured_limit_bytes, 50_000_000);
             assert_eq!(estimated_usage_bytes, 100_000_000);
         }

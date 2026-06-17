@@ -1,7 +1,7 @@
+use caml::compiler::{HostCapabilities, StaticCapabilityProbe};
+use caml::{CamlError, CamlPipeline, HardwareTarget};
 use std::io::Write;
 use std::sync::Arc;
-use caml::{CamlError, CamlPipeline, HardwareTarget};
-use caml::compiler::{StaticCapabilityProbe, HostCapabilities};
 
 #[tokio::test]
 async fn test_facade_builder_generic_linux_success() {
@@ -27,12 +27,15 @@ pipelines:
         ..HostCapabilities::default()
     }));
     let builder = builder.with_capability_probe(probe).with_native_adapters();
-    
+
     let res = builder.start().await;
     match res {
         Ok(_) => {}
         Err(CamlError::Builder(ref e)) => {
-            assert!(e.to_string().contains("runtime factory is required") || e.to_string().contains("missing adapter"));
+            assert!(
+                e.to_string().contains("runtime factory is required")
+                    || e.to_string().contains("missing adapter")
+            );
         }
         Err(CamlError::MissingAdapter { .. }) => {}
         Err(e) => {

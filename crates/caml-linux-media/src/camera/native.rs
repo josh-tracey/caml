@@ -66,13 +66,9 @@ impl LibcameraProviderFactory for NativeLibcameraFactory {
         let pixel_format = capture_profile.pixel_format.clone();
 
         let join_handle = std::thread::spawn(move || {
-            if let Err(e) = run_camera_worker(
-                &input_path,
-                capture_profile,
-                buffer_pool,
-                cmd_rx,
-                frame_tx,
-            ) {
+            if let Err(e) =
+                run_camera_worker(&input_path, capture_profile, buffer_pool, cmd_rx, frame_tx)
+            {
                 log::error!("Libcamera worker thread exited with error: {:?}", e);
             }
         });
@@ -113,21 +109,17 @@ fn run_camera_worker(
 
     let selector = CameraSelector::parse(input_path);
     let cam = match selector {
-        CameraSelector::Index(idx) => {
-            cameras.get(idx).ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
-        }
-        CameraSelector::Id(ref id) => {
-            cameras
-                .iter()
-                .find(|c| c.id() == id)
-                .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
-        }
-        CameraSelector::Model(ref model) => {
-            cameras
-                .iter()
-                .find(|c| c.id().contains(model))
-                .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?
-        }
+        CameraSelector::Index(idx) => cameras
+            .get(idx)
+            .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?,
+        CameraSelector::Id(ref id) => cameras
+            .iter()
+            .find(|c| c.id() == id)
+            .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?,
+        CameraSelector::Model(ref model) => cameras
+            .iter()
+            .find(|c| c.id().contains(model))
+            .ok_or_else(|| CameraError::CameraNotFound(input_path.to_string()))?,
     };
 
     let mut cam = cam
@@ -138,9 +130,7 @@ fn run_camera_worker(
         .generate_configuration(&[StreamRole::VideoRecording])
         .map_err(|e| CameraError::ConfigGenerateFailed(format!("{:?}", e)))?;
 
-    let cfg = cfgs
-        .get_mut(0)
-        .ok_or(CameraError::InvalidConfig)?;
+    let cfg = cfgs.get_mut(0).ok_or(CameraError::InvalidConfig)?;
 
     apply_capture_profile(cfg, &profile);
 
@@ -210,7 +200,10 @@ fn run_camera_worker(
                     }
                 }
 
-                if frame_tx.send(CameraFrameMessage { timestamp, data }).is_err() {
+                if frame_tx
+                    .send(CameraFrameMessage { timestamp, data })
+                    .is_err()
+                {
                     // Pipeline closed, shut down camera worker
                     let _ = cam.stop();
                     break;

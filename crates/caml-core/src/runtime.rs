@@ -100,7 +100,6 @@ impl std::fmt::Debug for PoolInner {
     }
 }
 
-
 #[derive(Clone)]
 pub struct BufferPool {
     inner: Arc<std::sync::Mutex<PoolInner>>,
@@ -140,7 +139,9 @@ impl BufferPool {
         let guard = self.inner.lock().expect("buffer pool lock poisoned");
         PoolStats {
             available: guard.free_indices.len(),
-            in_use: guard.allocated_count.saturating_sub(guard.free_indices.len()),
+            in_use: guard
+                .allocated_count
+                .saturating_sub(guard.free_indices.len()),
             high_watermark: guard.high_watermark,
         }
     }
@@ -246,12 +247,16 @@ impl MediaBuffer {
             let slot = &guard.slots[idx];
             slot.ptr.store(ptr, std::sync::atomic::Ordering::Release);
             slot.len.store(len, std::sync::atomic::Ordering::Release);
-            slot.ref_count.store(1, std::sync::atomic::Ordering::Release);
+            slot.ref_count
+                .store(1, std::sync::atomic::Ordering::Release);
             // Return the vec into the slot's storage (it stays alive under the slot).
             *slot.bytes.lock().expect("slot lock poisoned") = Some(bytes);
         }
 
-        PooledBuffer { slot_index: idx, pool }
+        PooledBuffer {
+            slot_index: idx,
+            pool,
+        }
     }
 }
 
@@ -674,7 +679,6 @@ impl Drop for FanoutRouter {
     }
 }
 
-
 #[async_trait]
 pub trait PipelineFactory: Send + Sync {
     async fn build_pipeline(
@@ -969,13 +973,19 @@ async fn supervise_pipeline_task(
                     .await;
 
                     if let Some(metrics) = inner.metrics.as_ref() {
-                        let formatted_message = format!("{:?}: {}", pipeline.recovery.class, message);
-                        metrics.record_restart(&pipeline.id, &formatted_message).await;
+                        let formatted_message =
+                            format!("{:?}: {}", pipeline.recovery.class, message);
+                        metrics
+                            .record_restart(&pipeline.id, &formatted_message)
+                            .await;
                     }
 
                     let backoff = std::cmp::min(
                         pipeline.recovery.initial_backoff.mul_f32(
-                            pipeline.recovery.backoff_multiplier.powi(attempts as i32 - 1)
+                            pipeline
+                                .recovery
+                                .backoff_multiplier
+                                .powi(attempts as i32 - 1),
                         ),
                         pipeline.recovery.max_backoff,
                     );
@@ -1018,7 +1028,8 @@ async fn run_pipeline_once(
     let result = run_pipeline_loop(cancellation, &mut context, &mut stages, &metrics).await;
 
     if let Some(m) = &metrics {
-        m.record_memory_watermark(&pipeline.id, buffer_pool.high_watermark_bytes()).await;
+        m.record_memory_watermark(&pipeline.id, buffer_pool.high_watermark_bytes())
+            .await;
     }
 
     result

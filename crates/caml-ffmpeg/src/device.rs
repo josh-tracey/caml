@@ -1,10 +1,10 @@
+use ffmpeg_next as ffmpeg;
 use std::ffi::CString;
 use std::time::Duration;
-use ffmpeg_next as ffmpeg;
 
 use caml_core::{CompiledProcessingProfile, ResolvedInputBackend};
 
-use crate::h264::{H264Config, normalize_h264_payload};
+use crate::h264::{normalize_h264_payload, H264Config};
 
 pub fn open_media_input(
     input: &str,
@@ -157,7 +157,10 @@ pub fn duration_from_packet(value: i64, time_base: ffmpeg::Rational) -> Option<D
     duration_from_time_base(Some(value), time_base)
 }
 
-pub fn duration_from_time_base(value: Option<i64>, time_base: ffmpeg::Rational) -> Option<Duration> {
+pub fn duration_from_time_base(
+    value: Option<i64>,
+    time_base: ffmpeg::Rational,
+) -> Option<Duration> {
     let ticks = value?;
     if ticks < 0 {
         return None;

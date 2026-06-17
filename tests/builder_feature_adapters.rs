@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use caml::{
-    CamlCompiler, CamlManifest, CompileError, RuntimeAdapters, RuntimeBuilder,
-};
 use caml::runtime::mock::{
     MockSinkFactory, MockSinkRecorder, MockSourceAction, MockSourceFactory, MockSourcePlan,
 };
+use caml::{CamlCompiler, CamlManifest, CompileError, RuntimeAdapters, RuntimeBuilder};
 
 #[test]
 fn test_generic_linux_compilation() {

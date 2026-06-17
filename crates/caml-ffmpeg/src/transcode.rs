@@ -1,26 +1,24 @@
+use ffmpeg_next as ffmpeg;
 use std::{path::Path, time::Duration};
 use tokio::sync::mpsc;
-use ffmpeg_next as ffmpeg;
 
 use caml_core::{
     CompiledOverlayLayer, CompiledOverlayProfile, CompiledPipeline, CompiledProcessingProfile,
-    CompiledTextOverlayStyle, CompiledTimestampOverlay, CompiledWatermarkOverlay,
-    OverlayPosition, OverlayTimezone,
+    CompiledTextOverlayStyle, CompiledTimestampOverlay, CompiledWatermarkOverlay, OverlayPosition,
+    OverlayTimezone,
 };
 
-use crate::hwaccel::TranscodeBackend;
-use crate::worker::{WorkerMessage, OwnedEncodedPacket, InputSpec};
 use crate::device::{
-    open_media_input, best_video_stream, frame_duration_from_processing, duration_from_packet,
-    duration_from_time_base,
+    best_video_stream, duration_from_packet, duration_from_time_base,
+    frame_duration_from_processing, open_media_input,
 };
-use crate::h264::{H264Config, extract_h264_config, normalize_h264_payload};
+use crate::h264::{extract_h264_config, normalize_h264_payload, H264Config};
+use crate::hwaccel::TranscodeBackend;
+use crate::worker::{InputSpec, OwnedEncodedPacket, WorkerMessage};
 
 use tokio_util::sync::CancellationToken;
 
-pub fn transcode_packets(
-    job: TranscodeJob<'_>,
-) -> Result<(), String> {
+pub fn transcode_packets(job: TranscodeJob<'_>) -> Result<(), String> {
     let mut context = open_media_input(job.input, job.input_spec)?;
     let nominal_duration =
         frame_duration_from_processing(job.processing).unwrap_or(job.default_frame_duration);
@@ -52,9 +50,12 @@ pub fn transcode_packets(
 
         if job.is_local_file {
             if let Some(pts) = packet.pts() {
-                let pts_duration = duration_from_time_base(Some(pts), stream.time_base()).unwrap_or(Duration::ZERO);
+                let pts_duration = duration_from_time_base(Some(pts), stream.time_base())
+                    .unwrap_or(Duration::ZERO);
                 let first_pts = *first_pts_duration.get_or_insert(pts_duration);
-                let relative_duration = pts_duration.checked_sub(first_pts).unwrap_or(Duration::ZERO);
+                let relative_duration = pts_duration
+                    .checked_sub(first_pts)
+                    .unwrap_or(Duration::ZERO);
                 let target_time = start_instant + relative_duration;
                 let now = std::time::Instant::now();
                 if target_time > now {
@@ -145,7 +146,10 @@ impl VideoTranscoder {
             .map_err(|error| format!("failed to send encoder EOF: {}", error))
     }
 
-    pub fn receive_decoded_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_decoded_frames(
+        &mut self,
+        tx: &mpsc::Sender<WorkerMessage>,
+    ) -> Result<(), String> {
         let mut decoded = ffmpeg::frame::Video::empty();
         while self.decoder.receive_frame(&mut decoded).is_ok() {
             let pts = decoded.timestamp().or(decoded.pts());
@@ -175,7 +179,10 @@ impl VideoTranscoder {
             .map_err(|error| format!("failed to flush video filter graph: {}", error))
     }
 
-    pub fn receive_filtered_frames(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_filtered_frames(
+        &mut self,
+        tx: &mpsc::Sender<WorkerMessage>,
+    ) -> Result<(), String> {
         let mut sink = self
             .filter
             .get("out")
@@ -195,7 +202,10 @@ impl VideoTranscoder {
         Ok(())
     }
 
-    pub fn receive_encoded_packets(&mut self, tx: &mpsc::Sender<WorkerMessage>) -> Result<(), String> {
+    pub fn receive_encoded_packets(
+        &mut self,
+        tx: &mpsc::Sender<WorkerMessage>,
+    ) -> Result<(), String> {
         let mut encoded = ffmpeg::Packet::empty();
         while self.encoder.receive_packet(&mut encoded).is_ok() {
             let raw_data = encoded
@@ -337,8 +347,7 @@ pub fn build_video_filter(
     Ok(filter)
 }
 
-pub const DEFAULT_DRAW_TEXT_FONT_PATH: &str =
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+pub const DEFAULT_DRAW_TEXT_FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 pub fn validate_overlay_runtime(pipeline: &CompiledPipeline) -> Result<(), String> {
     let Some(overlay) = pipeline.overlay.as_ref() else {
@@ -435,7 +444,11 @@ fn build_filter_spec(
             }
             CompiledOverlayLayer::Watermark(watermark) => {
                 let wm_label = format!("wm{}", index);
-                segments.push(format!("{}[{}]", watermark_filter_chain(watermark)?, wm_label));
+                segments.push(format!(
+                    "{}[{}]",
+                    watermark_filter_chain(watermark)?,
+                    wm_label
+                ));
                 segments.push(format!(
                     "[{}][{}]overlay={}[{}]",
                     current,
@@ -471,10 +484,7 @@ fn drawtext_filter_for_text(
     drawtext_filter(&text, style)
 }
 
-fn drawtext_filter(
-    text: &str,
-    style: &CompiledTextOverlayStyle,
-) -> Result<String, String> {
+fn drawtext_filter(text: &str, style: &CompiledTextOverlayStyle) -> Result<String, String> {
     let font_path = escape_filter_path(DEFAULT_DRAW_TEXT_FONT_PATH);
     let font_color = escape_filter_value(&style.font_color);
     let box_color = format!(
@@ -515,18 +525,11 @@ fn watermark_filter_chain(watermark: &CompiledWatermarkOverlay) -> Result<String
 fn drawtext_position_expr(position: OverlayPosition, margin: u32) -> (String, String) {
     match position {
         OverlayPosition::TopLeft => (format!("{margin}"), format!("{margin}")),
-        OverlayPosition::TopRight => (
-            format!("w-text_w-{margin}"),
-            format!("{margin}"),
-        ),
-        OverlayPosition::BottomLeft => (
-            format!("{margin}"),
-            format!("h-text_h-{margin}"),
-        ),
-        OverlayPosition::BottomRight => (
-            format!("w-text_w-{margin}"),
-            format!("h-text_h-{margin}"),
-        ),
+        OverlayPosition::TopRight => (format!("w-text_w-{margin}"), format!("{margin}")),
+        OverlayPosition::BottomLeft => (format!("{margin}"), format!("h-text_h-{margin}")),
+        OverlayPosition::BottomRight => {
+            (format!("w-text_w-{margin}"), format!("h-text_h-{margin}"))
+        }
     }
 }
 

@@ -5,15 +5,15 @@
 //! responsible for signaling, ICE negotiation, and managing RTCPeerConnection sessions.
 
 #[cfg(feature = "webrtc")]
+use caml::{webrtc::TrackLocalStaticRTP, CamlPipeline};
+#[cfg(feature = "webrtc")]
 use std::sync::Arc;
 #[cfg(feature = "webrtc")]
-use caml::{CamlPipeline, webrtc::TrackLocalStaticRTP};
-#[cfg(feature = "webrtc")]
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::api::APIBuilder;
 #[cfg(feature = "webrtc")]
 use webrtc::peer_connection::configuration::RTCConfiguration;
 #[cfg(feature = "webrtc")]
-use webrtc::api::APIBuilder;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 
 #[cfg(feature = "webrtc")]
 #[tokio::main]
@@ -35,8 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // 3. Add the track to the PeerConnection (WebRTC sends this track to browser client)
-    let rtp_sender = peer_connection.add_track(Arc::clone(&track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>).await?;
-    
+    let rtp_sender = peer_connection
+        .add_track(
+            Arc::clone(&track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>
+        )
+        .await?;
+
     // Spawn a task to read incoming RTCP packets (e.g. PLI, feedback) from the peer
     tokio::spawn(async move {
         let mut rtcp_buf = vec![0u8; 1500];

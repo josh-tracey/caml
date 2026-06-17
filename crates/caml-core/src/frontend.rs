@@ -254,7 +254,6 @@ impl CamlManifest {
         }
 
         if self.pipelines.is_empty() {
-
             return Err(ManifestError::Validation(
                 "manifest must define at least one pipeline".to_string(),
             ));

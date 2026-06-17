@@ -1,4 +1,8 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use crate::{
     error::CompileError,
@@ -268,7 +272,6 @@ impl CompiledPipeline {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledInput {
     pub kind: InputType,
@@ -499,7 +502,8 @@ impl CamlCompiler {
         }
 
         let mut warnings = Vec::new();
-        if estimated_pool_bytes.saturating_add(estimated_backend_bytes) > cma_allocation_limit_bytes {
+        if estimated_pool_bytes.saturating_add(estimated_backend_bytes) > cma_allocation_limit_bytes
+        {
             warnings.push(ResourceWarning::HighMemoryUsage);
         }
 
@@ -697,7 +701,8 @@ fn recovery_policy_for(pipeline: &PipelineNode) -> RecoveryPolicy {
         ) => RecoveryClass::Device,
     };
 
-    let (initial_backoff, max_backoff, backoff_multiplier, reset_after, max_restarts) = match class {
+    let (initial_backoff, max_backoff, backoff_multiplier, reset_after, max_restarts) = match class
+    {
         RecoveryClass::Network => (
             Duration::from_millis(250),
             Duration::from_secs(5),
@@ -779,7 +784,9 @@ fn compile_overlay_layer(
             style,
             ..
         } => Ok(CompiledOverlayLayer::Timestamp(CompiledTimestampOverlay {
-            format: format.clone().unwrap_or_else(|| default_timestamp_format(*timezone)),
+            format: format
+                .clone()
+                .unwrap_or_else(|| default_timestamp_format(*timezone)),
             timezone: *timezone,
             style: compile_text_overlay_style(*position, style),
         })),
@@ -911,7 +918,10 @@ fn capability_requirements_for(pipeline: &PipelineNode) -> Vec<CapabilityRequire
 fn overlay_uses_text(overlay: Option<&OverlayProfile>) -> bool {
     overlay.is_some_and(|profile| {
         profile.layers.iter().any(|layer| {
-            matches!(layer, OverlayLayer::Timestamp { .. } | OverlayLayer::Text { .. })
+            matches!(
+                layer,
+                OverlayLayer::Timestamp { .. } | OverlayLayer::Text { .. }
+            )
         })
     })
 }
